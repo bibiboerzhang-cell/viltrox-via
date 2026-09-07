@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from app.domains.recommendations import outcomes
+from app.domains.recommendations.communication_evidence import communication_evidence
 from scripts.vkpi_engineering_health_collect import collect_complexity
 
 
@@ -69,11 +70,6 @@ def test_refresh_update_plan_preserves_column_parameter_and_first_action_order()
         "project_created_at=COALESCE(project_created_at, ?)",
         "was_claimed=?",
         "claimed_at=COALESCE(claimed_at, ?)",
-        "outreach_sent=?",
-        "outreach_sent_at=COALESCE(outreach_sent_at, ?)",
-        "reply_received=?",
-        "reply_at=COALESCE(reply_at, ?)",
-        "reply_sentiment=COALESCE(NULLIF(reply_sentiment, ''), 'unknown')",
         "agreement_reached=?",
         "agreement_at=COALESCE(agreement_at, ?)",
         "content_published=?",
@@ -86,8 +82,6 @@ def test_refresh_update_plan_preserves_column_parameter_and_first_action_order()
         7, 2, 1500, 300, 5.0, True,
         True, "2026-01-02T00:00:00Z",
         True, "2026-01-03T00:00:00Z",
-        True, "2026-01-04T00:00:00Z",
-        True, "2026-01-05T00:00:00Z",
         True, "2026-01-06T00:00:00Z",
         True, "2026-01-07T00:00:00Z",
         "https://example.test/post",
@@ -113,7 +107,7 @@ def test_summarize_refresh_keeps_stage_fallback_and_net_refund_gate() -> None:
         "cost": {"cost_cents": 200},
     }
     values = outcomes._summarize_refresh(context, projects, evidence, claim=None)
-    assert values["first_outreach"] == "2026-01-03T00:00:00Z"
+    assert values["first_outreach"] is None
     assert values["first_agreement"] == "2026-01-04T00:00:00Z"
     assert values["has_net_order"] is False
     assert values["aggregates"] == {
@@ -123,8 +117,9 @@ def test_summarize_refresh_keeps_stage_fallback_and_net_refund_gate() -> None:
         "linked_kol_source": "existing",
         "project_created": True,
         "was_claimed": False,
-        "outreach_sent": True,
-        "reply_received": False,
+        "outreach_sent": None,
+        "reply_received": None,
+        "communication_evidence": communication_evidence(),
         "agreement_reached": True,
         "content_published": False,
         "order_attributed": False,

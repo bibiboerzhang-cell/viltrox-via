@@ -487,7 +487,7 @@ def build_match_evidence(
 
     for field in _MATCH_FIELDS:
         add(field, row.get(field))
-    for item in list(evidence.get("representative_evidence") or [])[:5]:
+    for item in list(evidence.get("representative_evidence") or [])[:24]:
         if isinstance(item, dict):
             for content_field in REPRESENTATIVE_CONTENT_EVIDENCE_FIELDS:
                 add(f"representative_evidence.{content_field}", item.get(content_field))
@@ -585,7 +585,7 @@ def build_controlled_alias_evidence(
     fields: list[tuple[str, Any]] = [
         (field, row.get(field)) for field in _MATCH_FIELDS
     ]
-    for item in list(evidence.get("representative_evidence") or [])[:5]:
+    for item in list(evidence.get("representative_evidence") or [])[:24]:
         if not isinstance(item, dict):
             continue
         fields.extend(

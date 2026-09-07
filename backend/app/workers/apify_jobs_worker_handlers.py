@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
@@ -31,6 +32,7 @@ from app.workers.apify_jobs_worker_helpers import (
 )
 from app.workers import apify_jobs_worker_deep_crawl as deep_crawl_worker
 from app.workers.apify_jobs_worker_session_convergence import session_max_running_seconds
+from app.domains.kol.search_execution_fence import SearchExecutionSuperseded
 
 
 logger = get_logger(__name__)
@@ -121,47 +123,51 @@ def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: di
     session_id = _int_or_none(payload.get("search_session_id") or payload.get("target_id"))
     if not session_id:
         raise ValueError("smart_search_profile_advance payload must include search_session_id")
+    execution_id = uuid4().hex
     try:
         kol_search_sessions.update_session_result_summary(
             int(session_id),
             status="running",
             summary_patch={
+                # This observation id is not an authorization token. Keep it
+                # outside the job display patch, which queue readbacks replace.
+                "search_execution_id": execution_id,
+                "search_execution_job_id": int(job["id"]),
+                "phase": "base",
                 "smart_search_profile_advance_job": {
                     "status": "running",
                     "job_id": int(job["id"]),
+                    "execution_id": execution_id,
                     "query_text": payload.get("query_text"),
                     # 终态判定预算:子任务排队/被拦超过该秒数,会话按「部分完成」收敛(见 *_session_convergence)。
                     "max_running_sec": session_max_running_seconds(),
                     "viltrox_fit_score_untouched": True,
                 }
             },
+            start_execution=True,
         )
         result = asyncio.run(
             kol_profile_discovery.execute_smart_search_profile_advance_pipeline(
                 session_id=int(session_id),
-                payload={**payload, "job_id": int(job["id"])},
+                payload={**payload, "job_id": int(job["id"]), "_search_execution_id": execution_id},
                 provider_actor=provider_actor,
             )
         )
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         try:
-            kol_search_sessions.update_session_result_summary(
+            kol_search_sessions.fail_search_execution(
                 int(session_id),
-                status="failed",
-                summary_patch={
-                    "smart_search_profile_advance_job": {
-                        "status": "failed",
-                        "job_id": int(job["id"]),
-                        "query_text": payload.get("query_text"),
-                        "error": str(exc)[:1000],
-                        "viltrox_fit_score_untouched": True,
-                    }
-                },
+                execution_id=execution_id,
+                job_id=int(job["id"]),
+                reason="search_pipeline_cancelled" if isinstance(exc, asyncio.CancelledError) else "search_pipeline_failed",
+                error=str(exc)[:1000] or type(exc).__name__,
             )
         except Exception as inner_exc:
-            logger.warning("smart_search_profile_advance failure summary update failed | job_id=%s error=%s", job.get("id"), inner_exc)
+            logger.warning("smart search terminal receipt unconfirmed | job_id=%s error_type=%s", job.get("id"), type(inner_exc).__name__)
         raise
 
+    if result.get("status") == "superseded":
+        raise SearchExecutionSuperseded("search_execution_not_current")
     job_status = "failed" if result.get("status") == "failed" else "done"
     last_error = "" if job_status == "done" else str(result.get("status") or "smart_search_profile_advance_failed")
     advance = result.get("advance") if isinstance(result.get("advance"), dict) else {}
@@ -183,6 +189,9 @@ def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: di
     }
     payload["search_session_last_job_status"] = job_status
     payload["search_session_last_error"] = last_error
+    lease_owner = str(job.get("lease_owner") or "").strip()
+    owner_clause = " AND lease_owner=%s AND attempts=%s AND status='running' RETURNING id" if lease_owner else ""
+    owner_params = (lease_owner, int(job.get("attempts") or 0)) if lease_owner else ()
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -193,9 +202,11 @@ def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: di
                     payload=%s::jsonb,
                     updated_at=NOW()
                 WHERE id=%s
-                """,
-                (job_status, last_error[:2000], _json(payload), int(job["id"])),
+                """ + owner_clause,
+                (job_status, last_error[:2000], _json(payload), int(job["id"]), *owner_params),
             )
+            if lease_owner and not cur.fetchone():
+                raise SearchExecutionSuperseded("search_job_execution_not_current")
 
 
 def _process_account_dossier_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:

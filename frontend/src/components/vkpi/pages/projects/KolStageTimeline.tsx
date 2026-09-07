@@ -87,7 +87,7 @@ function evidenceChip(stage: string, row: VkpiProjectRow, tracking: TrackingStat
   return {
     icon: ImageIcon,
     kind: 'screenshot',
-    label: `${stage === 'contacted' ? '联系' : stage === 'replied' ? '回复' : '阶段'}证据`,
+    label: `${stage === 'contacted' ? '联系' : stage === 'replied' ? '回复' : '阶段'}记录`,
     tone: 'bg-cyan-500/10 text-cyan-300',
   };
 }
@@ -268,7 +268,7 @@ export function KolStageTimeline({
                         ? `${evidenceCount} 条证据，当前曝光 ${formatLargeNum(row.views)}。`
                         : stage.key === 'shipped'
                           ? tracking.no ? '物流信息已记录，等待或确认到货。' : '已进入发货节点，物流单号待补齐。'
-                          : '阶段证据随真实项目行同步。'}
+                          : '阶段由人工维护，不代表消息已发送或回复已核验。'}
                     </div>
                   </div>
                 ) : null}

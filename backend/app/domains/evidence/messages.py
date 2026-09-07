@@ -17,7 +17,7 @@ from app.domains.evidence.common import (
     _rows,
     _utcnow,
 )
-from app.domains.recommendations import pool_action_bridge
+from app.domains.evidence.message_truth import capture_member_lookup, capture_message_fields, project_message_record, resolve_capture_kol
 from app.platform.db.schema import ensure_vkpi_schema
 
 def list_messages(
@@ -79,17 +79,20 @@ def list_messages(
         sql += " WHERE " + " AND ".join(f"({item})" for item in where)
     sql += " ORDER BY m.captured_at DESC, m.id DESC LIMIT ?"
     params.append(max(1, min(500, int(limit or 100))))
-    rows = _rows(conn.execute(sql, params).fetchall())
+    rows = [project_message_record(row) for row in conn.execute(sql, params).fetchall()]
     return {"messages": rows, "count": len(rows)}
 
 def create_message(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = capture_message_fields(body)
     ensure_vkpi_schema()
     conn = get_conn()
     project_id = _int(body.get("project_id"))
     kol_id = _int(body.get("kol_id"))
     project = _project_context(project_id, staff, write=True) if project_id else {}
-    if project and not kol_id:
-        kol_id = _int(project.get("kol_id"))
+    if project:
+        lookup = capture_member_lookup(body, project.get("kol_id"))
+        members = conn.execute(*lookup).fetchall() if lookup else []
+        kol_id = resolve_capture_kol(body, project.get("kol_id"), members=members)
     if kol_id and not project_id:
         _assert_kol_access(kol_id, staff, write=True)
     if not project_id and not kol_id and not scope.can_view_all(staff):
@@ -134,17 +137,8 @@ def create_message(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
             detail=str(body.get("source") or "manual"),
             metadata={"project_id": project_id or None, "kol_id": kol_id or None},
         )
-        # C4 写口插桩(2026-08-23):外联消息即时桥——outbound → outreach_sent(L 车道
-        # sync_message_outcomes 同口径),不再等每日同步;主写已提交,桥失败只告警。
-        pool_action_bridge.bridge_message_outreach(
-            message_id=item.get("id"),
-            project_id=project_id,
-            kol_id=kol_id,
-            direction=item.get("direction"),
-            staff=staff,
-            source="evidence_message",
-        )
-    return item
+    # Saving a manual record is not a provider send or delivery acknowledgement.
+    return project_message_record(item)
 
 def get_message(message_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
@@ -157,7 +151,7 @@ def get_message(message_id: int, *, staff: dict[str, Any] | None = None) -> dict
         )
         .fetchall()
     )
-    return {"message": item, "attachments": attachments}
+    return {"message": project_message_record(item), "attachments": attachments}
 
 def add_message_attachment(message_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()

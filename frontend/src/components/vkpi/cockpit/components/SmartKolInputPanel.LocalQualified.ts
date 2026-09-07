@@ -18,6 +18,12 @@ export const LOCAL_QUALIFICATION_SPEC = Object.freeze({
 
 export type LocalQualificationState = "qualified" | "pending" | "rejected";
 
+export function nullableFollowerCount(value: unknown): number | null {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 // 服务端「活跃度未知」桶:这个人的最近视频我们一次都没抓到过。他不是被判不
 // 合格,也不算进 30 人目标数,但确实被返回给了操作员,所以必须一眼看得出来
 // 和真·活跃的人不一样,并且能单独勾选。
@@ -253,7 +259,7 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
     "dossier_status",
   ]) ?? analysis.status;
   const gateFollowers = asRecord(qualification.followers);
-  const followersValue = Number(
+  const followersValue = nullableFollowerCount(
     firstValue([root, source], ["followers", "follower_count", "subscriber_count", "subscribers"])
       ?? gateFollowers.value,
   );
@@ -275,7 +281,7 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
     item,
     name: cleanText(item.display_name || item.handle) || `KOL #${item.kol_pool_id}`,
     platform: cleanText(item.platform) || "未知平台",
-    followers: Number.isFinite(followersValue) && followersValue >= 0 ? followersValue : null,
+    followers: followersValue,
     latestVideoAt: latestVideoFor(records),
     marketEvidence: marketEvidenceFor(marketEvidence, root, source),
     languageEvidence: languageEvidenceFor(qualification, candidateFacets, root, source),

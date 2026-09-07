@@ -4,6 +4,7 @@ import { asRecord, cleanText, display, type Row, providerGateReasonOf, providerU
 import {
   LOCAL_QUALIFIED_TARGET,
   localQualifiedRowsFromItems,
+  nullableFollowerCount,
   type LocalQualifiedRow,
   type LocalQualifiedSummary,
 } from "./SmartKolInputPanel.LocalQualified";
@@ -39,6 +40,8 @@ export function strictOnlineDiscoveryPlatforms(values: readonly string[]): strin
 
 export type OnlineQualifiedSummary = LocalQualifiedSummary & {
   contractValid: boolean;
+  blocked: boolean;
+  blockReason: string;
   terminal: boolean;
   snapshotComplete: boolean;
   snapshotRevision: number;
@@ -69,7 +72,7 @@ function rank(value: unknown): number | undefined {
 function onlineItemFromSessionItem(item: Row): VkpiKolRecallItem {
   const payload = asRecord(item.payload);
   const proof = asRecord(payload.qualification_evidence);
-  const followers = Number(payload.followers ?? asRecord(proof.followers).value ?? 0);
+  const followers = nullableFollowerCount(payload.followers ?? asRecord(proof.followers).value);
   const profileType = cleanText(payload.profile_type);
   const bucket = ["creator", "reviewer", "mixed"].includes(profileType) ? profileType : "";
   return {
@@ -79,7 +82,7 @@ function onlineItemFromSessionItem(item: Row): VkpiKolRecallItem {
     display_name: cleanText(payload.display_name || payload.handle),
     platform: cleanText(payload.platform),
     profile_type: profileType,
-    followers: Number.isFinite(followers) && followers >= 0 ? followers : null,
+    followers,
     avatar_url: cleanText(payload.avatar_url),
     profile_url: cleanText(item.source_url || payload.profile_url),
     vector_score: Number(item.score || 0),
@@ -175,6 +178,12 @@ const REASON_LABELS: Record<string, string> = {
   provider_outcome_unknown: "数据源执行结果待核对，已停止继续调用",
   provider_dispatch_blocked: "数据源执行被配置或预算保护阻断",
   provider_partial: "数据源仅返回部分结果，未当作完整完成",
+  audience_evidence_source_unavailable: "未接入可信受众证据源，已停止本次联网调用",
+  discovery_content_date_unknown: "发现内容的发布日期待核验",
+  discovery_content_identity_missing: "发现内容缺少可核验的链接或编号",
+  discovery_content_date_in_future: "发现内容的发布日期在未来，需核验",
+  discovery_content_outside_window: "发现内容超出本次检索时间范围",
+  discovery_content_not_active: "发现内容的类型或可用状态不符合要求",
   candidate_budget_exhausted: "候选预算已用尽",
   provider_round_budget_exhausted: "供应商轮次已用尽",
   candidate_exhausted: "可核验候选已耗尽",
@@ -216,6 +225,8 @@ export function onlineQualifiedSummaryFromSession(session: VkpiKolSearchHistoryI
     && snapshotId
   );
   const rows = onlineRows(session, contract, contractValid);
+  const blocked = contractValid && cleanText(contract.status) === "blocked";
+  const stopReason = cleanText(asRecord(contract.round_gate).stopped_by || contract.stopped_by);
   const strictRows = rows.filter((row) => row.strictQualified);
   const accepted = contractValid ? Math.min(acceptedClaim || 0, returnedClaim || 0, strictRows.length) : 0;
   const rowPending = rows.filter((row) => row.qualification === "pending").length;
@@ -228,6 +239,8 @@ export function onlineQualifiedSummaryFromSession(session: VkpiKolSearchHistoryI
   const sessionTerminal = Boolean(session && isSearchSessionTerminal(session));
   return {
     contractValid,
+    blocked,
+    blockReason: blocked ? REASON_LABELS[stopReason] || "联网检索已停止，请检查数据源接入或预算" : "",
     // A finished session without a valid strict-online contract is a completed
     // zero-result lane, not an indefinitely pending lane. Rows remain
     // unselectable because only a valid terminal contract can authorize them.
@@ -257,7 +270,7 @@ export function onlineQualifiedSummaryFromSession(session: VkpiKolSearchHistoryI
     candidateBudget: contractValid ? count(contract.candidate_budget) || 0 : 0,
     candidateBudgetUsed: contractValid ? count(contract.candidate_budget_used) || 0 : 0,
     exhausted: contractValid && contract.exhausted === true,
-    selectionReady: contractValid && contract.terminal === true && contract.snapshot_complete === true,
+    selectionReady: !blocked && contractValid && contract.terminal === true && contract.snapshot_complete === true,
     pendingContentEvidence: contractValid ? count(contract.pending_content_evidence_count) || 0 : 0,
     contentEvidenceFollowupStatus: contractValid ? cleanText(contentEvidenceFollowup.status) : "",
   };

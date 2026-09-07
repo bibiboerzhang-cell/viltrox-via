@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from app.domains.kol.profile_recall_match_evidence import candidate_set_distribution_from_items
+from app.domains.kol.search_geo_intent import COUNTRY_ALIASES, resolve_geo_intent
 
 from app.domains.kol.discovery_filters import (
     SUPPORTED_DISCOVERY_PLATFORMS,
@@ -526,38 +527,8 @@ def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[s
     return filtered
 
 
-_MARKET_ALIASES = {
-    "us": "us", "usa": "us", "united states": "us", "united states of america": "us", "美国": "us",
-    "uk": "gb", "gb": "gb", "united kingdom": "gb", "great britain": "gb", "英国": "gb",
-    "ca": "ca", "canada": "ca", "加拿大": "ca",
-    "de": "de", "germany": "de", "德国": "de",
-    "fr": "fr", "france": "fr", "法国": "fr",
-    "jp": "jp", "japan": "jp", "日本": "jp",
-    "kr": "kr", "korea": "kr", "south korea": "kr", "韩国": "kr",
-    "au": "au", "australia": "au", "澳大利亚": "au",
-    "es": "es", "spain": "es", "españa": "es", "西班牙": "es",
-    "mx": "mx", "mexico": "mx", "méxico": "mx", "墨西哥": "mx",
-    "it": "it", "italy": "it", "italia": "it", "意大利": "it",
-    "br": "br", "brazil": "br", "brasil": "br", "巴西": "br",
-    "pt": "pt", "portugal": "pt", "葡萄牙": "pt",
-    "ru": "ru", "russia": "ru", "russian federation": "ru", "俄罗斯": "ru",
-    "th": "th", "thailand": "th", "泰国": "th",
-    "vn": "vn", "vietnam": "vn", "viet nam": "vn", "越南": "vn",
-    "id": "id", "indonesia": "id", "印尼": "id", "印度尼西亚": "id",
-    "tr": "tr", "turkey": "tr", "türkiye": "tr", "土耳其": "tr",
-    "pl": "pl", "poland": "pl", "波兰": "pl",
-    "nl": "nl", "netherlands": "nl", "holland": "nl", "荷兰": "nl",
-    "sa": "sa", "saudi arabia": "sa", "沙特": "sa",
-    "ae": "ae", "united arab emirates": "ae", "uae": "ae", "阿联酋": "ae",
-    "in": "in", "india": "in", "印度": "in",
-    "sg": "sg", "singapore": "sg", "新加坡": "sg",
-    "nz": "nz", "new zealand": "nz", "新西兰": "nz",
-}
+_MARKET_ALIASES = {alias: code.lower() for alias, code in COUNTRY_ALIASES.items()}
 AMBIGUOUS_MARKET_CONSTRAINT = "__ambiguous_market__"
-_CONTEXT_REQUIRED_MARKET_CODES = frozenset({"ae", "au", "ca", "de", "id", "in", "it", "pl", "pt", "sa"})
-_LOWERCASE_SAFE_MARKET_CODES = frozenset({
-    "br", "fr", "gb", "jp", "kr", "mx", "nl", "nz", "ru", "sg", "th", "tr", "uk", "vn",
-})
 
 
 def explicit_market_constraint(query: Any, planned_market: Any) -> str:
@@ -566,38 +537,12 @@ def explicit_market_constraint(query: Any, planned_market: Any) -> str:
     ``planned_market`` is retained for API compatibility but is never trusted
     as a hard constraint; provider/fallback defaults are not operator choices.
     """
-    raw_text = str(query or "").strip()
-    text = f" {raw_text.lower()} "
     del planned_market
-    matches: set[str] = set()
-    for alias, code in _MARKET_ALIASES.items():
-        if any("\u4e00" <= char <= "\u9fff" for char in alias):
-            if alias in text:
-                matches.add(code)
-        elif len(alias) == 2:
-            upper = re.escape(alias.upper())
-            if alias == "pl" and re.search(r"(?i)(?<![A-Za-z])PL\s*(?:-\s*)?(?:mount|卡口)", raw_text):
-                # PL is also a cinema-lens mount.  Even phrases such as
-                # "in PL mount" describe product compatibility, not Poland.
-                continue
-            # Ambiguous codes collide with ordinary language, US states, or
-            # product syntax (notably ``PL mount``). Other uppercase country
-            # codes remain useful shorthand in KOL operator queries.
-            if alias in _CONTEXT_REQUIRED_MARKET_CODES:
-                pattern = rf"(?i)(?:\b(?:in|from|country|market)\s*[:=]?\s*){upper}(?![A-Za-z])"
-            elif alias in _LOWERCASE_SAFE_MARKET_CODES:
-                pattern = rf"(?i)(?<![A-Za-z]){upper}(?![A-Za-z])"
-            else:
-                # Keep ambiguous lowercase words such as the English pronoun
-                # ``us`` and Spanish ``es`` from silently becoming countries.
-                pattern = rf"(?<![A-Za-z]){upper}(?![A-Za-z])"
-            if re.search(pattern, raw_text):
-                matches.add(code)
-        elif re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", text):
-            matches.add(code)
-    if len(matches) > 1:
+    geo = resolve_geo_intent(query)
+    matches = geo["creator_countries"]
+    if geo["creator_status"] == "ambiguous" or len(matches) > 1:
         return AMBIGUOUS_MARKET_CONSTRAINT
-    return next(iter(matches)) if matches else ""
+    return matches[0].lower() if matches else ""
 
 
 def normalize_market_constraint(value: Any) -> str:
@@ -615,6 +560,9 @@ def resolve_market_constraint(query: Any, structured: Any = None) -> str:
     if raw_structured and not structured_market:
         raise ValueError("unsupported market constraint")
     if query_market and structured_market and query_market != structured_market:
+        raise ValueError("conflicting market constraints")
+    geo = resolve_geo_intent(query, {"market": structured_market} if structured_market else None)
+    if geo["creator_status"] == "ambiguous":
         raise ValueError("conflicting market constraints")
     return query_market or structured_market
 

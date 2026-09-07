@@ -13,6 +13,7 @@ export const SCENARIOS = {
   read_failure: { title: "读取失败后暂停操作", instruction: "先打开“人工对账”并填原因和证据，再点下方“模拟读取失败”，最后点击组件刷新；提交对账应暂停。" },
   plan_gap: { title: "计划缺证据", instruction: "只读展示合成 planning_readiness：先补证据，不表示项目已创建、批准或执行。" },
   plan_review: { title: "规划草案结构化审阅", instruction: "全宽展示完整合成规划：核对分配合计、未分配额和模型费用未知；只是待人工审阅的草案，没有执行按钮。" },
+  kpi_truth: { title: "KPI 与消息证据待核", instruction: "真实成员/KOL抽屉：工作量待核不得回退旧积分；KPI 来源和汇总的未知不变 0，已核实的 0 保留；手工消息不冒充收发确认。" },
 } as const;
 export type Scenario = keyof typeof SCENARIOS;
 type State = {

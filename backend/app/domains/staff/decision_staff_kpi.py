@@ -1,6 +1,6 @@
 """Dependency-injected staff KPI aggregation.
 
-This module intentionally stays free of application imports.  The public
+Application I/O remains dependency-injected. The public
 ``decision_staff.staff_kpi`` wrapper supplies the current domain functions so
 tests and callers can continue to monkeypatch the established boundary.
 """
@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+from app.shared.vkpi_kpi_communication_truth import KPI_LABEL_SEMANTICS, project_kpi_metric_summary
+from app.domains.recommendations.communication_evidence import communication_evidence
 
 
 Rows = list[dict[str, Any]]
@@ -282,7 +284,13 @@ def _collect_ledger_metrics(
             continue
         target = rows_by_staff[sid]
         for key in _LEDGER_KEYS:
-            target[key] = row.get(key) or 0
+            if key in {"ledger_workload_score", "kpi_credit"}:
+                metric = "workload_score" if key == "ledger_workload_score" else key
+                projected = project_kpi_metric_summary({"metric_key": metric, "total_value": row.get(key)})
+                target["recorded_" + key] = projected["recorded_total_value"]
+                target[key] = projected["total_value"]
+            else:
+                target[key] = row.get(key) or 0
 
 
 def _apply_financial_truth(row: dict[str, Any]) -> None:
@@ -324,7 +332,7 @@ def _finalize_rows(rows_by_staff: dict[int, dict[str, Any]]) -> Rows:
             "net_contribution": row["net_contribution_data_status"],
             "roi": row["roi_data_status"],
         }
-        row["workload_score"] = (
+        row["legacy_workload_score"] = (
             int(row.get("kol_claims") or 0) * 2
             + int(row.get("contacted") or 0)
             + int(row.get("replied") or 0) * 2
@@ -333,12 +341,16 @@ def _finalize_rows(rows_by_staff: dict[int, dict[str, Any]]) -> Rows:
             + int(row.get("published") or 0) * 5
             + int(row.get("measured") or 0) * 3
         )
-        row["legacy_workload_score"] = row["workload_score"]
-        if float(row.get("ledger_workload_score") or 0):
-            row["workload_score"] = round(float(row.get("ledger_workload_score") or 0), 4)
+        row["operational_workload_score"] = (
+            row["legacy_workload_score"] - int(row.get("contacted") or 0) - int(row.get("replied") or 0) * 2
+        )
+        row["recorded_stage_counts"] = {key: row.get(key) for key in ("contacted", "replied")}
+        row.update(workload_score=None, ledger_workload_score=None, kpi_credit=None, contacted=None, replied=None,
+                   label_semantics=KPI_LABEL_SEMANTICS, communication_evidence=communication_evidence())
+        row["metric_statuses"].update(workload_score="unknown", kpi_credit="unknown", contacted="unknown", replied="unknown")
         result_rows.append(row)
     result_rows.sort(
-        key=lambda item: (int(item.get("gmv_cents") or 0), int(item.get("workload_score") or 0)),
+        key=lambda item: (int(item.get("gmv_cents") or 0), int(item.get("operational_workload_score") or 0)),
         reverse=True,
     )
     return result_rows
@@ -391,10 +403,10 @@ def build_staff_kpi(
         "start": start,
         "staff_id": staff_id,
         "rows": _finalize_rows(rows_by_staff),
+        "label_semantics": KPI_LABEL_SEMANTICS,
+        "legacy_kpi_formula": {"contacted": 1, "replied": 2},
         "kpi_formula": {
             "kol_claim": 2,
-            "contacted": 1,
-            "replied": 2,
             "agreed": 4,
             "shipped": 3,
             "published": 5,

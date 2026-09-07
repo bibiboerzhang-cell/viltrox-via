@@ -388,11 +388,16 @@ def test_staff_kpi_missing_financial_sources_stays_unknown(
     assert row["roi"] is None
     assert row["net_roi"] is None
     assert row["data_status"] == "awaiting_source"
+    assert all(row[key] is None for key in ("contacted", "replied", "workload_score", "kpi_credit"))
     assert row["metric_statuses"] == {
         "gmv": "awaiting_source",
         "cost": "awaiting_source",
         "net_contribution": "awaiting_source",
         "roi": "awaiting_source",
+        "contacted": "unknown",
+        "replied": "unknown",
+        "workload_score": "unknown",
+        "kpi_credit": "unknown",
     }
 
 
@@ -416,11 +421,16 @@ def test_staff_kpi_computes_financials_only_after_both_canonical_sources_exist(
     assert row["roi"] == 4.0
     assert row["net_roi"] == 3.0
     assert row["data_status"] == "real"
+    assert all(row[key] is None for key in ("contacted", "replied", "workload_score", "kpi_credit"))
     assert row["metric_statuses"] == {
         "gmv": "real",
         "cost": "real",
         "net_contribution": "real",
         "roi": "real",
+        "contacted": "unknown",
+        "replied": "unknown",
+        "workload_score": "unknown",
+        "kpi_credit": "unknown",
     }
 
 

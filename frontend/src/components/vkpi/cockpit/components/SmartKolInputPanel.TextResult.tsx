@@ -18,6 +18,7 @@ import {
   StrictQualifiedList,
 } from "./SmartKolInputPanel.LocalQualifiedList";
 import { DISCOVERY_PLATFORM_OPTIONS, onlineQualifiedSummaryFromSession } from "./SmartKolInputPanel.OnlineQualified";
+import { OnlineQueryCellCoverage } from "./SmartKolInputPanel.QueryCellCoverage";
 import {
   resultOriginBadgeOfKind,
   resultOriginCounts,
@@ -509,7 +510,7 @@ function TextResultSectionBody({
   ].some((item) => candidateGrowthSummary(item as VkpiKolRecallItem).active);
   const totalStrictUnique = Math.min(60, localStrict.uniqueQualified + onlineStrict.uniqueQualified);
   const onlineStats = [
-    onlineStrict.contractValid ? `${onlineStrict.selectionReady ? "终态" : "增量中"} r${onlineStrict.snapshotRevision}` : "",
+    onlineStrict.blocked ? "待接入处理" : onlineStrict.contractValid ? `${onlineStrict.selectionReady ? "终态" : "增量中"} r${onlineStrict.snapshotRevision}` : "",
     onlineStrict.duplicateLocal > 0 ? `与本地重复 ${onlineStrict.duplicateLocal}` : "",
     onlineStrict.duplicateOnline > 0 ? `联网内重复 ${onlineStrict.duplicateOnline}` : "",
     onlineStrict.duplicateLocalInventory > 0 ? `池内已有 ${onlineStrict.duplicateLocalInventory}` : "",
@@ -609,7 +610,7 @@ function TextResultSectionBody({
             onLanguagesChange={setContentLanguages}
             onProfileTypesChange={setKolProfileTypes}
           />
-          <div className="mt-1 text-[9px] text-slate-600">改选后点下方“重新全网查找”；本地与联网名单都会按新硬闸重算。</div>
+          <div className="mt-1 text-[9px] text-slate-600">改选后点下方“重新全网查找”；联网名单按新条件重新验证，跳过库内召回。</div>
         </div>
         {resultsStale ? (
           <div className="mb-2 rounded-md border border-amber-300/25 bg-amber-400/[0.08] px-2.5 py-1.5 text-[10px] text-amber-100">
@@ -639,12 +640,13 @@ function TextResultSectionBody({
           onFavorite={favoriteOne}
         />
         <div className="my-2 border-t border-emerald-300/10 pt-2 text-[10px] font-medium text-emerald-100">联网严格净新增名单</div>
+        <OnlineQueryCellCoverage coverage={asRecord(asRecord(searchSession?.result_summary).online_qualification).query_cell_coverage} blockedReason={onlineStrict.blockReason} />
         <OnlineContentEvidenceNotice
           count={onlineStrict.pendingContentEvidence}
           followupStatus={onlineStrict.contentEvidenceFollowupStatus}
           target={onlineStrict.target}
         />
-        <StrictQualifiedList
+        {!onlineStrict.blocked ? <StrictQualifiedList
           summary={onlineStrict}
           lane="online"
           terminal={onlineStrict.terminal}
@@ -660,7 +662,7 @@ function TextResultSectionBody({
           favoriteErrors={favoriteErrors}
           favoritesSyncing={favoritesSyncing}
           onFavorite={favoriteOne}
-        />
+        /> : null}
         <div className="mt-2 rounded-md border border-emerald-300/15 bg-emerald-400/[0.04] px-2.5 py-1.5 text-[9.5px] text-emerald-100/80">
           关注 = 加入本人 MY KOL，后续可分组、认领和跟进；不等于批准项目，也不会自动外联或展示联系方式明文。
           {favoritesLoadError ? <div className="mt-0.5 text-amber-100">{favoritesLoadError}</div> : null}

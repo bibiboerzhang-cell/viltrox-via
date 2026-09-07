@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
+from app.shared.communication_truth import project_outcome_communications
 
 
 def _attach(
@@ -171,6 +172,7 @@ def attach_recommendation_entities(
             "SELECT id, recommendation_id, launch_id, kol_pool_id, was_claimed, project_created, reply_received, agreement_reached, content_published, order_attributed, attributed_clicks, attributed_orders, attributed_gmv_cents, attributed_cost_cents, computed_roi, recommended_at, outcome_finalized_at FROM vkpi_recommendation_outcomes WHERE id=?",
             (outcome_id,),
         )
+        outcome = project_outcome_communications(outcome) if outcome else {}
         _attach(
             context,
             entities,

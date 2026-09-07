@@ -1,8 +1,8 @@
 """闭环波 L3 · GTM 三窗对答案自动回填(规格第三章:7/14/28 天绝不单窗)。
 
 refresh_gtm_windows(dry_run=False):对 vkpi_gtm_outcomes **未裁决** 行按账龄回填三窗:
-  - window_7d  执行效率:联系了吗/回复了吗/寄样了吗/发布了吗
-      (读 vkpi_messages 外联双向 + vkpi_shipments 履约 + vkpi_content_posts /
+  - window_7d  执行记录:手工消息记录/独立人审回复结果/寄样/发布
+      (vkpi_messages 不证明真实收发;vkpi_shipments 履约 + vkpi_content_posts /
        vkpi_kol_video_evidence 发布 + vkpi_project_kol_assignments 送样漏斗 stage);
   - window_14d 内容表现:evidence 播放/点赞/评论 + 短链点击
       (vkpi_kol_video_evidence + vkpi_link_clicks JOIN vkpi_links,bot 剔除);
@@ -33,6 +33,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.domains import business_truth
 from app.domains.market_brain.data_readiness import seal_outcome_window_evidence
+from app.domains.market_brain.communication_projection import project_communication_metrics
 from app.domains.platform import event_ledger
 
 logger = get_logger(__name__)
@@ -162,12 +163,32 @@ def _action_bound_reply_actual(
     )
 
 
+def _message_record_counts(conn: Any, where: list[str], params: list[Any],
+                           start: datetime, end: datetime) -> dict[str, Any]:
+    unknown = {"outbound": None, "inbound": None, "status": "unknown"}
+    if not where:
+        return unknown
+    try:
+        messages = [dict(row) for row in conn.execute(
+            f"SELECT direction, captured_at FROM vkpi_messages WHERE {' OR '.join(where)}", tuple(params)
+        ).fetchall()]
+    except Exception:
+        logger.debug("gtm_windows.message_records_unavailable", exc_info=True)
+        return unknown
+    counts = {"outbound": 0, "inbound": 0, "status": "observed_records"}
+    for message in messages:
+        direction = _text(message.get("direction"), 20)
+        if direction in {"outbound", "inbound"} and _in_window(message.get("captured_at"), start, end):
+            counts[direction] += 1
+    return counts
+
+
 def _window_7d_metrics(conn: Any, *, kol_pool_id: int, kol_id: int,
                        project_ids: list[int], start: datetime, end: datetime,
                        action_inbox_id: int = 0, product_sku: str = "",
                        channel: str = "") -> dict[str, Any]:
-    """执行效率:联系/回复/寄样/发布(读外联+履约+送样漏斗既有表)。"""
-    # 外联双向:kol 桥 ∪ 该 KOL 项目。
+    """手工记录不等于通信结果；人审回复/履约/送样保留各自证据口径。"""
+    # 消息录入方向:kol 桥 ∪ 该 KOL 项目，不是已收发证明。
     msg_where: list[str] = []
     msg_params: list[Any] = []
     if kol_id > 0:
@@ -176,13 +197,7 @@ def _window_7d_metrics(conn: Any, *, kol_pool_id: int, kol_id: int,
     if project_ids:
         msg_where.append(f"project_id IN ({_ids_placeholders(project_ids)})")
         msg_params.extend(project_ids)
-    messages = _rows(
-        conn,
-        f"SELECT direction, captured_at FROM vkpi_messages WHERE {' OR '.join(msg_where)}",
-        tuple(msg_params),
-    ) if msg_where else []
-    outbound = [m for m in messages if _text(m.get("direction"), 20) == "outbound" and _in_window(m.get("captured_at"), start, end)]
-    inbound = [m for m in messages if _text(m.get("direction"), 20) == "inbound" and _in_window(m.get("captured_at"), start, end)]
+    message_records = _message_record_counts(conn, msg_where, msg_params, start, end)
 
     # 寄样:该 KOL 项目的 shipments(shipped/delivered 双节点)。
     shipments = _rows(
@@ -238,20 +253,14 @@ def _window_7d_metrics(conn: Any, *, kol_pool_id: int, kol_id: int,
         start=start,
         end=end,
     )
-    return {
-        "contacted": len(outbound) > 0,
-        "outreach_sent_n": len(outbound),
-        "replied": len(inbound) > 0,
-        "reply_n": len(inbound),
+    return project_communication_metrics({
+        "message_record_counts": message_records,
+        "message_record_window_basis": "captured_at_not_sent_or_received_at",
         # Registered per-action actual stays None until the immutable bridge can
         # prove which project/outbound belongs to the action.  Message metadata
         # never participates in that proof.
         # Generic KOL/project message counts below remain descriptive only.
         **action_reply,
-        # Stable event-window ratio: both numerator and denominator are filtered
-        # by captured_at <= window_end, so a late refresh cannot substitute a
-        # mutable present-day counter for the contracted 7-day actual.
-        "reply_rate": round(len(inbound) / len(outbound), 6) if outbound else None,
         "sample_shipped_n": len(shipped),
         "sample_delivered_n": len(delivered),
         "published": published_n > 0,
@@ -260,7 +269,7 @@ def _window_7d_metrics(conn: Any, *, kol_pool_id: int, kol_id: int,
         "published_evidence_n": len(evidence_in),
         "assignment_stage_counts": stage_counts,
         "stage_note": "assignment_stage_counts 为当前态快照(非窗内事件),仅供裁决参考。",
-    }
+    })
 
 
 def _window_14d_metrics(conn: Any, *, kol_pool_id: int, kol_id: int,
@@ -385,7 +394,8 @@ def _build_window_payload(conn: Any, row: dict[str, Any], *, horizon_days: int,
             "honesty": (
                 "bet 无 KOL 关联(官号/站点类动作),执行效率窗自动回填不可用,留给裁决界面人工补。"
                 if no_kol else
-                "自动回填=既有外联/履约/发布真行聚合;无桥项(linked_main_kol_id 缺)只能覆盖 kol_pool 直连表;"
+                "消息统计仅为手工录入记录，captured_at不是实际收发时间，不能证明联系/回复或回复率;"
+                "专用action-bound人审结果保持独立口径;无桥项(linked_main_kol_id 缺)只能覆盖 kol_pool 直连表;"
                 "回填是素材不是结论,裁决仍归人。"
             ),
         })

@@ -13,6 +13,7 @@ from app.domains.kol.profile_recall_match_evidence import (
     CONTROLLED_ALIAS_EVIDENCE_SOURCE,
     why_fit_from_match_evidence,
 )
+from app.domains.kol.profile_content_match_provenance import project_match_coordinates
 
 
 _SMART_LOCAL_PRIVATE_ITEM_FIELDS = {
@@ -121,6 +122,7 @@ def _project_match_evidence(value: Any) -> list[dict[str, str]]:
             CAPABILITY_USE_EVIDENCE_SOURCE,
         }
         evidence = {"field": field, "term": term}
+        evidence.update(project_match_coordinates(raw))
         if source:
             evidence["source"] = source
         if controlled:

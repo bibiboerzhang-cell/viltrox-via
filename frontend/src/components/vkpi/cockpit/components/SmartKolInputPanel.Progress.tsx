@@ -9,6 +9,8 @@ import type {
 } from "./SmartKolInputPanel.derivers";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
 
+const INTERRUPTED_NOTE = "本次查找已中止；已返回结果保留，未结束子任务与费用仍待核对";
+
 function targetLabel(value: number, target: number): string {
   return target > 0 ? `${value}/${target}` : String(value);
 }
@@ -163,13 +165,14 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
     : search.dataReady != null
       ? `已返回 ${search.dataReady}`
       : "返回数量未确认";
-  const contractActive = !contract.requestedTasksTerminal && (
+  const interrupted = contract.orchestrationInterrupted === true;
+  const contractActive = !interrupted && !contract.requestedTasksTerminal && (
     contract.orchestrationPending
     || ["queued", "running", "active"].includes(contract.state)
     || (contract.queuedUnits ?? 0) + (contract.runningUnits ?? 0) + (contract.activeUnits ?? 0) > 0
   );
   const requestedOnlyComplete = contract.requestedTasksSuccessful && !contract.fullAnalysisComplete;
-  const overallState = contract.blockedByWorker
+  const overallState = interrupted ? progress.phaseLabel : contract.blockedByWorker
     ? "后台阻塞"
     : contract.fullAnalysisComplete
       ? "完整数据可用"
@@ -205,8 +208,8 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-medium leading-[18px] text-cyan-50">
-          <span data-testid="kol-progress-state-icon" data-state={contract.blockedByWorker ? "blocked" : contractActive ? "active" : contract.requestedTasksTerminal ? "terminal" : "idle"}>
-            {contract.blockedByWorker
+          <span data-testid="kol-progress-state-icon" data-state={interrupted ? "terminal" : contract.blockedByWorker ? "blocked" : contractActive ? "active" : contract.requestedTasksTerminal ? "terminal" : "idle"}>
+            {interrupted ? <TriangleAlert size={12} className="text-amber-300" /> : contract.blockedByWorker
               ? <WifiOff size={12} className="text-rose-300" />
               : contractActive
                 ? <Loader2 size={12} className="animate-spin text-cyan-200" />
@@ -263,6 +266,7 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">
+        {interrupted ? <span>{INTERRUPTED_NOTE}</span> : null}
         <span>完成口径：持久化成功 {contract.successfulUnits ?? "未返回"}/{contract.requestedUnits ?? "未返回"} 单元</span>
         {(contract.queuedUnits ?? 0) > 0 ? <span>排队 {contract.queuedUnits} · 不计完成</span> : null}
         {(contract.runningUnits ?? 0) > 0 ? <span>运行 {contract.runningUnits} · 不计完成</span> : null}
@@ -308,7 +312,9 @@ export function ProgressiveSearchStageCard({ progress }: { progress: SearchSessi
   if (progress.contract) return <ContractProgressCard progress={progress} />;
 
   const notRequested = progress.video.notRequested + progress.comments.notRequested + progress.audience.notRequested;
-  const decisionCopy = progress.decisionEligible
+  const decisionCopy = progress.observationTerminal
+    ? INTERRUPTED_NOTE
+    : progress.decisionEligible
     ? "决策证据已就绪"
     : progress.fullAnalysisComplete
       ? "完整分析已完成 · 暂未满足决策条件"

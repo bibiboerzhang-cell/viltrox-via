@@ -311,7 +311,7 @@ def _refresh_session(conn: Any, session_id: int) -> dict[str, Any]:
     那些状态有别的写端在负责,这里插手会打架。
     """
     row = conn.execute(
-        "SELECT status, result_summary_json FROM vkpi_kol_search_sessions WHERE id=?",
+        "SELECT status, result_summary_json FROM vkpi_kol_search_sessions WHERE id=? FOR NO KEY UPDATE",
         (int(session_id),),
     ).fetchone()
     if not row:

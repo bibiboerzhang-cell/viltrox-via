@@ -7,6 +7,8 @@ import { numberFormatter } from '../shared/vkpiFormatters';
 import { coerceProjectStage, formatMoneyCents, profileToKolDetail, safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { platformLabels } from '../shared/vkpiConstants';
 import { KolTwinCard } from '../cards/KolTwinCard';
+import { kpiValueLabel } from './kpiValuePresentation';
+import { messageRecordDirectionLabel } from './messageRecordPresentation';
 
 export function KolProfileDrawer({
   profile,
@@ -115,7 +117,7 @@ export function KolProfileDrawer({
             {' · '}
             短链 {numberFormatter.format(links.length)}
             {' · '}
-            KPI 证据 {numberFormatter.format(safeNumber(summary.kpi_source_count || kpiLedger.length))}
+            KPI 记录 {numberFormatter.format(safeNumber(summary.kpi_source_count || kpiLedger.length))}
           </p>
           <em>
             销售 {formatMoneyCents(summary.revenue_cents)}
@@ -156,12 +158,12 @@ export function KolProfileDrawer({
             </article>
           )}
         </DetailList>
-        <DetailList title="消息记录" rows={messages} empty="暂无消息证据。">
+        <DetailList title="消息记录" rows={messages} empty="暂无沟通记录。">
           {(row) => (
             <article key={`kol-message-${String(row.id || row.created_at || Math.random())}`}>
               <div><strong>{textValue(row.source, 'manual')}</strong><span>{textValue(row.captured_at || row.created_at, '-')}</span></div>
               <p>{textValue(row.snippet || row.body, '无内容')}</p>
-              <em>{textValue(row.direction, '-')} · {textValue(row.evidence_url, '无证据链接')}</em>
+              <em>{messageRecordDirectionLabel(row.direction)} · 收发未核验 · {textValue(row.evidence_url, '无证据链接')}</em>
             </article>
           )}
         </DetailList>
@@ -220,11 +222,11 @@ export function KolProfileDrawer({
             </article>
           )}
         </DetailList>
-        <DetailList title="KPI 工作量证据" rows={kpiLedger} empty="暂无 KPI ledger 证据。">
+        <DetailList title="KPI 工作量记录" rows={kpiLedger} empty="暂无 KPI ledger 记录。">
           {(row) => (
             <article key={`kol-kpi-${String(row.id || row.source_ref || row.metric_key || Math.random())}`}>
               <div><strong>{textValue(row.metric_key, 'kpi')}</strong><span>{textValue(row.ledger_date || row.created_at, '-')}</span></div>
-              <p>数值 {numberFormatter.format(safeNumber(row.metric_value))} · 项目 {textValue(row.project_name || row.project_id, '-')}</p>
+              <p>数值 {kpiValueLabel(row.metric_value, row.aggregation_eligible)} · 项目 {textValue(row.project_name || row.project_id, '-')}</p>
               <em>{textValue(row.source_type, '-')} · {textValue(row.source_ref, '无来源 ref')} · {textValue(row.confidence, '-')}</em>
             </article>
           )}
@@ -233,7 +235,7 @@ export function KolProfileDrawer({
           {(row) => (
             <article key={`kol-kpi-summary-${String(row.metric_key || Math.random())}`}>
               <div><strong>{textValue(row.metric_key, 'kpi')}</strong><span>{numberFormatter.format(safeNumber(row.row_count))} 条</span></div>
-              <p>累计 {numberFormatter.format(safeNumber(row.total_value))}</p>
+              <p>累计 {kpiValueLabel(row.total_value, row.aggregation_eligible)}</p>
               <em>{textValue(row.latest_ledger_date, '-')} · {textValue(row.latest_source_ref, '无来源 ref')}</em>
             </article>
           )}

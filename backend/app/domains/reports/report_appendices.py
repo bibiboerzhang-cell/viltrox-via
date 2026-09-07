@@ -16,6 +16,7 @@ from app.domains.reports.report_helpers import (
     _money_cents,
 )
 from app.domains.staff import kpi_ledger
+from app.shared.vkpi_kpi_communication_truth import project_kpi_metric_summary, project_kpi_source_row
 from app.platform.db.schema import ensure_vkpi_schema
 
 
@@ -249,15 +250,17 @@ def _kpi_source_appendix(
     ).fetchall()
     grouped_rows: list[dict[str, Any]] = []
     for row in grouped:
-        item = dict(row)
+        item = project_kpi_metric_summary(dict(row))
         key = str(item.get("metric_key") or "")
         item["metric_label"] = kpi_ledger.METRIC_LABELS.get(key, key)
         item["formatted_total"] = _format_kpi_value(key, item.get("total_value"))
+        if "recorded_total_value" in item:
+            item["recorded_formatted_total"] = _format_kpi_value(key, item["recorded_total_value"])
         item["is_recommendation_metric"] = key.startswith("recommendation_")
         grouped_rows.append(item)
     detail_rows: list[dict[str, Any]] = []
     for row in source_rows:
-        item = dict(row)
+        item = project_kpi_source_row(dict(row))
         key = str(item.get("metric_key") or "")
         metadata = _load_json(item.get("metadata_json"))
         components = metadata.get("components") if isinstance(metadata, dict) else []
@@ -270,11 +273,19 @@ def _kpi_source_appendix(
             "source_type": item.get("source_type") or "-",
             "source_ref": _safe_source_ref(item.get("source_ref")),
             "confidence": item.get("confidence") or "-",
+            "recorded_metric_value": item.get("recorded_metric_value", item.get("metric_value")),
+            "recorded_confidence": item.get("recorded_confidence", item.get("confidence")),
+            "aggregation_eligible": item.get("aggregation_eligible"),
+            "metric_value_status": item.get("metric_value_status"),
+            "label_semantics": item.get("label_semantics"),
             "project": item.get("project_name") or item.get("project_uid") or "-",
             "kol": item.get("kol_name") or "-",
             "staff": item.get("staff_name") or (f"Staff #{item['staff_id']}" if item.get("staff_id") else "-"),
-            "formula": metadata.get("formula") if isinstance(metadata, dict) else "",
-            "component_summary": _component_summary(components),
+            "formula": ("历史记录公式（未核验，不计入当前积分）" if item.get("aggregation_eligible") is False
+                        else metadata.get("formula") if isinstance(metadata, dict) else ""),
+            "component_summary": "" if item.get("aggregation_eligible") is False else _component_summary(components),
+            "recorded_formula": metadata.get("formula") if isinstance(metadata, dict) else "",
+            "recorded_component_summary": _component_summary(components),
             "recommendation_id": metadata.get("recommendation_id") if isinstance(metadata, dict) else None,
             "outcome_id": metadata.get("outcome_id") if isinstance(metadata, dict) else None,
             "launch_id": metadata.get("launch_id") if isinstance(metadata, dict) else None,

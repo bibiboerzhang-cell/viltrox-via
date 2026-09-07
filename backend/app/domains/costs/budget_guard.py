@@ -613,6 +613,23 @@ def _apify_run_already_recorded(conn: Any, run_id: str) -> bool:
     return row is not None
 
 
+def _apify_usage_usd(run_obj: dict) -> float | None:
+    usage = run_obj.get("usageTotalUsd")
+    if usage is None and isinstance(run_obj.get("usageUsd"), dict):
+        usage = sum(
+            float(value or 0)
+            for value in run_obj["usageUsd"].values()
+            if isinstance(value, (int, float))
+        )
+    try:
+        usage_usd: float | None = float(usage) if usage is not None else None
+        if usage_usd is not None:
+            _cost_decimal(usage_usd)  # Reject non-finite/negative metadata too.
+    except (TypeError, ValueError):
+        usage_usd = None
+    return usage_usd
+
+
 def record_apify_run(
     run: Any = None,
     *,
@@ -625,28 +642,20 @@ def record_apify_run(
     """C5 统一记账口:所有 Apify actor run 结束后走这里落 vkpi_ai_cost_ledger。
 
     - 幂等:同 apify_run_id 近 14 天只记一笔(散点埋点/重试不会双记);
-    - 成本口径:精确的 run.usageTotalUsd(平台用量)+ 内部价目表估算的 actor 费
-      (pay-per-result / 付费 actor 费不在 usageTotalUsd 里 → metadata.estimated=true);
+    - usageTotalUsd 是当前观测额，不是供应商最终账单；正数也保留 provisional；
+      缺失时内部价表只记估算，不将估算结清付费预约；
     - run-sync HTTP 调用拿不到 run 对象时允许 run=None(pricing_basis=no_run_object);
     - 只记账不拦截:绝不做预算预检、绝不改调用行为;任何异常吞掉返回 recorded=False。
     """
     try:
+        from app.domains.costs.apify_cost_reconciliation import observed_charge, reconcile_run_observation
+
         run_obj = run if isinstance(run, dict) else {}
         reservation_key = str(run_obj.get("_vkpi_budget_reservation_key") or "").strip()
         actor_key = str(actor_id or "").strip().replace("~", "/")
         run_id = str(run_obj.get("id") or "").strip()
         run_status = str(run_obj.get("status") or "")
-        usage = run_obj.get("usageTotalUsd")
-        if usage is None and isinstance(run_obj.get("usageUsd"), dict):
-            usage = sum(
-                float(value or 0)
-                for value in run_obj["usageUsd"].values()
-                if isinstance(value, (int, float))
-            )
-        try:
-            usage_usd: float | None = float(usage) if usage is not None else None
-        except (TypeError, ValueError):
-            usage_usd = None
+        usage_usd = _apify_usage_usd(run_obj)
         items: int | None = None
         if dataset_item_count is not None:
             try:
@@ -663,9 +672,10 @@ def record_apify_run(
         # PPE 计费结算后 usageTotalUsd 已含事件费(实测 IG 50 条结算 $0.0950=50×$0.0019 分毫不差)——
         # usage 有值时绝不再叠价目表费(旧口径会双记 ~2x);usage 缺/为 0(.call() 返回瞬间事件费未结算)
         # 才用表估先记,留待 reconcile_apify_costs 用 API 结算现值覆盖。
-        if usage_usd is not None and usage_usd > 0:
-            cost_usd = usage_usd
-            pricing_basis = "usage_settled"
+        observed = observed_charge(run_obj)
+        if observed is not None:
+            cost_usd = float(observed)
+            pricing_basis = "usage_observed"
         elif pricing:
             cost_usd = max(0.0, fee)
             pricing_basis = "priced_table_estimate"
@@ -675,14 +685,21 @@ def record_apify_run(
         else:
             cost_usd = 0.0
             pricing_basis = "no_run_object"
-        estimated = pricing_basis != "usage_settled"
+        estimated = pricing_basis != "usage_observed"
         ensure_budget_schema()
         reservation_settlement: dict[str, Any] = {}
-        if reservation_key:
-            reservation_settlement = settle_apify_reservation(reservation_key, cost_usd)
+        if reservation_key and observed is not None:
+            corrected = reconcile_run_observation(
+                get_conn(), run_obj, postgres=is_postgres_runtime(), now=datetime.now(timezone.utc),
+                initial_entry={"actor_id": actor_key, "platform": str(platform or ""),
+                    "operation": str(operation or ""), "source": str(source or ""),
+                    "run_status": run_status, "dataset_item_count": items})
+            if corrected.get("reconciled") and not corrected.get("delta_usd") and not corrected.get("ledger_inserted"):
+                return {"recorded": False, "reason": "duplicate_run", "apify_run_id": run_id}
+            return corrected
         if run_id and _apify_run_already_recorded(get_conn(), run_id):
             return {"recorded": False, "reason": "duplicate_run", "apify_run_id": run_id}
-        return record_cost(
+        recorded = record_cost(
             scope="provider:apify",
             ai_provider="apify",
             model_name=actor_key,
@@ -706,8 +723,17 @@ def record_apify_run(
                 "unified_entry": True,
                 "budget_reservation_key": reservation_key,
                 "budget_reservation_settlement": reservation_settlement,
+                "cost_budget_accounted": not bool(reservation_key) or bool(reservation_settlement),
+                "cost_state": "provisional" if observed is not None else "unknown",
+                "provider_cost_final": False,
+                "charge_observation": ({"amount_usd": format(observed, "f"),
+                    "observed_at": _utcnow(), "stable_since": _utcnow(),
+                    "state": "provisional", "provider_final": False,
+                    "stable_window_seconds": 300} if observed is not None else {}),
             },
         )
+        return {**recorded, "cost_state": "provisional" if observed is not None else "unknown",
+                "provider_cost_final": False}
     except Exception:
         # 记账失败绝不打断业务调用(与旧散点埋点同约定)。
         logger.warning("record_apify_run failed (accounting must never break scraping)", exc_info=True)
@@ -716,73 +742,16 @@ def record_apify_run(
 
 def reconcile_apify_costs(hours: int = 48, max_rows: int = 300) -> dict[str, Any]:
     """Apify 记账对账:PPE 事件费在 .call() 返回瞬间常未结算(实测低记 ~6x),
-    用 API 结算现值覆盖近 N 小时的 apify 台账行,并把差额补进预算 scope 的 current_spend。
+    只读获取新的费用观测，再按 run_id 原子更新明细、预约及原月预算差额。
+    usageTotalUsd 没有 final 保证；稳定观测也不标供应商最终账单。
     只对账不拦截;单行失败跳过不断批;无 token/网络失败整体温和返回。"""
-    import os as _os
+    from app.domains.costs.apify_cost_reconciliation_job import reconcile_apify_costs_job
 
-    token = str(_os.environ.get("APIFY_TOKEN") or "").strip()
-    if not token:
-        return {"reconciled": 0, "checked": 0, "reason": "no_token"}
-    ensure_budget_schema()
-    conn = get_conn()
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rows = conn.execute(
-        """
-        SELECT id, cost_usd, metadata_json FROM vkpi_ai_cost_ledger
-        WHERE ai_provider = 'apify' AND occurred_at >= ?
-        ORDER BY id DESC LIMIT ?
-        """,
-        (cutoff, max(1, int(max_rows))),
-    ).fetchall()
-    import httpx
-
-    checked = 0
-    reconciled = 0
-    delta_total = 0.0
-    with httpx.Client(timeout=15.0) as client:
-        for row in rows:
-            data = dict(row)
-            try:
-                meta = json.loads(data.get("metadata_json") or "{}")
-            except (TypeError, ValueError):
-                continue
-            run_id = str(meta.get("apify_run_id") or "").strip()
-            if not run_id or meta.get("reconciled"):
-                continue
-            checked += 1
-            try:
-                resp = client.get(
-                    f"https://api.apify.com/v2/actor-runs/{run_id}",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-                if resp.status_code != 200:
-                    # 2026-07-18 审计修:对账失败必须可见,否则结算漂移永不收敛。
-                    logger.warning("apify reconcile non-200 run_id=%s status=%s", run_id, resp.status_code)
-                    continue
-                settled = float(((resp.json().get("data") or {}).get("usageTotalUsd")) or 0.0)
-            except Exception:
-                logger.warning("apify reconcile fetch failed run_id=%s", run_id, exc_info=True)
-                continue
-            recorded = float(data.get("cost_usd") or 0.0)
-            delta = settled - recorded
-            if settled <= 0 or abs(delta) < 0.001:
-                continue
-            meta.update({"reconciled": True, "settled_usd": round(settled, 6), "recorded_before_reconcile": round(recorded, 6)})
-            conn.execute(
-                "UPDATE vkpi_ai_cost_ledger SET cost_usd = ?, metadata_json = ? WHERE id = ?",
-                (round(settled, 6), json.dumps(meta, ensure_ascii=False), int(data["id"])),
-            )
-            for scope_key in ("provider:apify", "monthly_total"):
-                conn.execute(
-                    "UPDATE vkpi_provider_budget_caps SET current_spend = current_spend + ? WHERE scope = ?",
-                    (round(delta, 6), scope_key),
-                )
-            reconciled += 1
-            delta_total += delta
-    conn.commit()
-    if reconciled:
-        logger.info("apify cost reconcile | rows=%s delta_usd=%.4f", reconciled, delta_total)
-    return {"reconciled": reconciled, "checked": checked, "delta_usd": round(delta_total, 4)}
+    return reconcile_apify_costs_job(
+        hours, max_rows, ensure_schema=ensure_budget_schema, get_conn=get_conn,
+        is_postgres_runtime=is_postgres_runtime,
+        now=lambda: datetime.now(timezone.utc), logger=logger,
+    )
 
 
 def _cost_bucket_rows(conn: Any, since_iso: str, until_iso: str | None = None) -> dict[str, Any]:
@@ -880,8 +849,8 @@ def _apify_coverage(conn: Any, since_iso: str, until_iso: str | None = None) -> 
 
 
 _COST_NOTE = (
-    "内部记账口径:精确部分=Apify usageTotalUsd(平台用量);付费 actor 费按内部价目表估算"
-    "(estimated 标记)。Apify console 无法程序化比对,权威账单以 console 为准。"
+    "内部记账口径:Apify usageTotalUsd 是当前费用观测额，正数及稳定观测均不代表最终账单；"
+    "缺少有效观测时仅按内部价目表估算(estimated 标记)。晚到差额需按原 run 对账；权威账单以 console 为准。"
 )
 
 

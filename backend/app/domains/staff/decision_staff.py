@@ -19,6 +19,7 @@ from app.shared.vkpi_decision_common import (
     _window_start,
 )
 from app.platform.db.schema import ensure_vkpi_schema
+from app.shared.vkpi_kpi_communication_truth import KPI_LABEL_SEMANTICS, project_kpi_source_row
 
 
 def staff_directory() -> dict[str, Any]:
@@ -213,7 +214,12 @@ def staff_profile(staff_id: int, *, staff: dict[str, Any] | None = None, window:
         "cost_cents": 0 if costs_visible else None,
         "projects": 0,
         "kol_claims": 0,
-        "workload_score": 0,
+        "workload_score": None,
+        "kpi_credit": None,
+        "ledger_workload_score": None,
+        "operational_workload_score": None,
+        "label_semantics": KPI_LABEL_SEMANTICS,
+        "metric_statuses": {"workload_score": "unknown", "kpi_credit": "unknown"},
     }
 
     projects = _safe_rows(
@@ -304,6 +310,7 @@ def staff_profile(staff_id: int, *, staff: dict[str, Any] | None = None, window:
         (target_staff_id, limit),
     )
     for row in kpi_ledger:
+        row.update(project_kpi_source_row(row))
         key = str(row.get("metric_key") or "")
         row["metric_label"] = _KPI_LABELS.get(key, key)
         row["metadata"] = _parse_json(row.get("metadata_json"))

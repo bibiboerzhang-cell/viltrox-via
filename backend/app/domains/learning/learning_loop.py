@@ -7,6 +7,9 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.recommendations.communication_evidence import (
+    COMMUNICATION_NODES, LABEL_SEMANTICS, project_outcome_communications,
+)
 
 
 SCENARIO = "p10_learning_snapshot"
@@ -38,7 +41,8 @@ def _group_counts(table_name: str, column: str) -> dict[str, int]:
     return {str(row["key"]): int(row["count"] or 0) for row in rows}
 
 
-def _outcome_counts() -> dict[str, int]:
+def _outcome_counts() -> dict[str, Any]:
+    counts = {}
     try:
         row = get_conn().execute(
             """
@@ -48,17 +52,17 @@ def _outcome_counts() -> dict[str, int]:
               SUM(CASE WHEN was_rejected THEN 1 ELSE 0 END) AS rejected,
               SUM(CASE WHEN was_claimed THEN 1 ELSE 0 END) AS claimed,
               SUM(CASE WHEN project_created THEN 1 ELSE 0 END) AS project_created,
-              SUM(CASE WHEN outreach_sent THEN 1 ELSE 0 END) AS outreach_sent,
-              SUM(CASE WHEN reply_received THEN 1 ELSE 0 END) AS reply_received,
               SUM(CASE WHEN content_published THEN 1 ELSE 0 END) AS content_published,
               SUM(CASE WHEN order_attributed THEN 1 ELSE 0 END) AS order_attributed
             FROM vkpi_recommendation_outcomes
             """
         ).fetchone()
+        counts = {key: int(row[key] or 0) for key in row.keys()}
     except Exception as exc:
         logger.warning("vkpi learning snapshot outcome count failed: %s", exc)
-        return {}
-    return {key: int(row[key] or 0) for key in row.keys()}
+    projected = project_outcome_communications(counts) or {}
+    return {**counts, **{node: projected.get(node) for node in COMMUNICATION_NODES},
+            "communication_evidence": projected["communication_evidence"], "label_semantics": LABEL_SEMANTICS}
 
 
 def build_learning_snapshot(*, json_out: str = "", md_out: str = "") -> dict[str, Any]:
@@ -121,6 +125,11 @@ def format_learning_snapshot(payload: dict[str, Any]) -> str:
         lines.append(f"{key}={int(value or 0)}")
     for key, value in sorted((payload.get("readiness") or {}).items()):
         lines.append(f"readiness.{key}={str(bool(value)).lower()}")
+    outcomes = project_outcome_communications(payload.get("recommendation_outcomes") or {}) or {}
+    for node in sorted(COMMUNICATION_NODES):
+        value = outcomes.get(node)
+        lines.append(f"recommendation_outcomes.{node}={'unknown' if value is None else value}")
+    lines.append(f"label_semantics={LABEL_SEMANTICS}")
     lines.append("```")
     lines.extend(["", "## Gaps", ""])
     for gap in payload.get("gaps") or []:

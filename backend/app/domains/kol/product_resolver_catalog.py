@@ -554,6 +554,55 @@ def exact_sku_resolution(
     )
 
 
+def unique_exact_sku_product(products: Any, value: Any) -> dict[str, Any] | None:
+    """Return one exact normalized catalog row, preserving the resolver seam."""
+    normalized = normkey(value)
+    matches = [product for product in (products or []) if isinstance(product, dict)
+               and normalized and not str(product.get("sku") or "").upper().startswith("IMAGE-AWARDS")
+               and normkey(product.get("sku")) == normalized]
+    return matches[0] if len(matches) == 1 else None
+
+
+_EMBEDDED_SKU_RE = re.compile(
+    r"(?<![a-z0-9_-])[a-z][a-z0-9]*(?:[-_][a-z0-9]+(?:\.[a-z0-9]+)*){2,}(?![a-z0-9_-])", re.I,
+)
+
+
+def embedded_sku_resolution(
+    query: str, *, catalog_reader: CatalogReader,
+    apply_constraints: Callable[[str, dict[str, dict[str, Any]]], dict[str, dict[str, Any]]],
+) -> tuple[bool, dict[str, Any] | None]:
+    """Resolve a complete catalog SKU before prose token/focal interpretation.
+
+    This never treats F12 as a decimal aperture or invents a mount rule. The
+    catalog supplies both. Additional affirmative prose still owns hard filters.
+    """
+    from app.domains.kol.search_intent_text import affirmative_search_text
+
+    text = str(query or "")
+    mentions = [match.group() for match in _EMBEDDED_SKU_RE.finditer(text) if len(match.group()) <= 240 and any(char.isdigit() for char in match.group())]
+    if not mentions:
+        return False, None
+    products = catalog_products(catalog_reader)
+    known = {normkey(row.get("sku")) for row in products if not str(row.get("sku") or "").upper().startswith("IMAGE-AWARDS")}
+    if not any(normkey(mention) in known for mention in mentions):
+        return False, None
+    affirmative = affirmative_search_text(text)
+    prefixes = {re.split(r"[-_]", str(row.get("sku") or ""))[0].casefold() for row in products}
+    active = {normkey(match.group()): match.group() for match in _EMBEDDED_SKU_RE.finditer(affirmative)
+              if normkey(match.group()) in known or re.split(r"[-_]", match.group())[0].casefold() in prefixes}
+    if len(active) != 1:
+        return True, None
+    sku_key = next(iter(active))
+    product = unique_exact_sku_product(products, sku_key)
+    remainder = _EMBEDDED_SKU_RE.sub(lambda match: " " if normkey(match.group()) == sku_key else match.group(), affirmative)
+    if product is None or not apply_constraints(remainder, {sku_key: product}):
+        return True, None
+    projection = public_product_projection(product, match_score=(1, 1, len(str(product.get("series") or ""))))
+    projection.update(resolution_kind="catalog_sku_exact", resolution_basis="operator_embedded_sku")
+    return True, projection
+
+
 def exact_sku_product(value: Any, *, catalog_reader: CatalogReader) -> dict[str, Any] | None:
     _ambiguous, product = exact_sku_resolution(value, catalog_reader=catalog_reader)
     return product

@@ -8,9 +8,13 @@ not capture alternate copies of those call sites at import time.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 from typing import Any
 
 from app.platform.apify_budget import ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked
+from app.services.intelligence.account_search_provider_policy import (
+    validate_provider_discovery_policy, youtube_discovery_hints,
+)
 
 
 @dataclass
@@ -29,6 +33,7 @@ class DiscoveryPlan:
     exact_query: bool
     pos_terms: list[str] = field(default_factory=list)
     neg_terms: list[str] = field(default_factory=list)
+    provider_discovery_policy: dict[str, Any] | None = None
 
 
 @dataclass
@@ -92,12 +97,20 @@ def prepare_discovery_plan(
     sanitize_limits: Any,
     resolve_limit: Any,
     normalize_leg_cursors: Any,
+    provider_discovery_policy: dict[str, Any] | None = None,
 ) -> DiscoveryPlan:
     """Normalize request values without starting provider or persistence effects."""
-    query = text_value(search_query_en) or text_value(query_text)
-    relevance_language, _region_code = market_to_language(market)
-    search_term = localize_search_terms(query, relevance_language)
-    if relevance_language == "en" and has_cjk(search_term):
+    policy = validate_provider_discovery_policy(provider_discovery_policy)
+    query = text_value(query_text) if exact_query else text_value(search_query_en) or text_value(query_text)
+    if policy is None:
+        relevance_language, _region_code = market_to_language(market)
+    else:
+        relevance_language = youtube_discovery_hints(policy, video_evidence=False).get("relevanceLanguage", "")
+    # Locked QueryCells are already planned expressions. Localization, CJK
+    # fallback or the alternate English text must not silently replace them.
+    preserve_query = exact_query or (policy is not None and not relevance_language)
+    search_term = query if preserve_query else localize_search_terms(query, relevance_language)
+    if not exact_query and relevance_language == "en" and has_cjk(search_term):
         fallback_terms = [
             term
             for term in persona_positive_terms(
@@ -129,6 +142,7 @@ def prepare_discovery_plan(
         auto_enroll=bool(auto_enroll),
         exclude_chinese=bool(exclude_chinese),
         exact_query=bool(exact_query),
+        provider_discovery_policy=policy,
     )
 
 
@@ -168,7 +182,7 @@ def _platform_items(
     strict_items: list[dict[str, Any]] = []
     mismatch_count = 0
     for raw in raw_items:
-        item = dict(raw or {})
+        item = deepcopy(dict(raw or {}))
         signals = platform_signals(item)
         if signals and signals != {platform}:
             mismatch_count += 1
@@ -213,6 +227,8 @@ async def search_provider_legs(
                 deadline_seconds=deadline_seconds(platform),
                 page_cursor=plan.leg_cursors.get(platform),
                 exact_query=plan.exact_query,
+                **({"provider_discovery_policy": deepcopy(plan.provider_discovery_policy)}
+                   if plan.provider_discovery_policy is not None else {}),
             )
         except (ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked) as exc:
             stop_dispatch = True

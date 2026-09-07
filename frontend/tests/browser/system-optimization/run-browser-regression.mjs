@@ -63,6 +63,18 @@ const SNAPSHOT = `(() => {
   const presentation = document.querySelector('[aria-label="营销规划草案"]');
   const budget = presentation?.querySelector('[aria-label="预算分配"]');
   const rawPlan = document.querySelector('[aria-label="合成规划原始数据"]');
+  const truth = document.querySelector('[aria-label="真实 KPI 与消息组件 · 合成数据"]');
+  const staff = truth?.querySelector('[aria-label="成员详情"]');
+  const kol = truth?.querySelector('[aria-label="KOL Profile"]');
+  const article = (root, label) => [...(root?.querySelectorAll('article') || [])].find(n => n.querySelector('strong')?.textContent === label);
+  const withinList = (node) => {
+    if (!visible(node)) return false;
+    const r = node.getBoundingClientRect();
+    const container = node.closest('.vkpi-evidence-list')?.getBoundingClientRect();
+    return r.top >= Math.max(0, container?.top ?? 0) - 1 && r.bottom <= Math.min(innerHeight, container?.bottom ?? innerHeight) + 1;
+  };
+  const staffRows = ['合成分组：待核工作量', '合成分组：已核实零值', '合成来源：待核消息', '合成来源：已核实零值'];
+  const kolRows = ['合成KOL来源：待核', '合成KOL来源：零值', '合成KOL汇总：待核', '合成KOL汇总：零值'];
   const budgetBounds = budget?.getBoundingClientRect();
   const kpi = [...document.querySelectorAll('.ds-kpi')].find(n => n.querySelector('.ds-kpi__label')?.textContent === '本周信号');
   return {
@@ -83,13 +95,21 @@ const SNAPSHOT = `(() => {
     presentation_controls: presentation?.querySelectorAll('button, a, input, select').length ?? 0,
     budget_values: [...(budget?.querySelectorAll('dl > div') || [])].map(n => ({ label: n.querySelector('dt')?.innerText, value: n.querySelector('dd')?.innerText })),
     budget_within_viewport: Boolean(budgetBounds && budgetBounds.top >= 0 && budgetBounds.bottom <= innerHeight),
-    raw_plan_collapsed: Boolean(rawPlan && !rawPlan.open)
+    raw_plan_collapsed: Boolean(rawPlan && !rawPlan.open),
+    kpi_truth: {
+      visible: visible(staff) && visible(kol), staff_text: staff?.innerText || '',
+      workload: [...(staff?.querySelectorAll('.vkpi-info-block') || [])].find(n => n.querySelector('span')?.textContent === '工作量分')?.querySelector('strong')?.textContent,
+      staff_rows: staffRows.map(label => ({ label, value: article(staff, label)?.querySelector('div > b, div > span')?.textContent })),
+      kol_rows: kolRows.map(label => ({ label, text: article(kol, label)?.querySelector('p')?.textContent })),
+      manual_message: article(kol, 'manual')?.innerText || '', manual_in_viewport: withinList(article(kol, 'manual')),
+      kol_kpi_in_viewport: kolRows.every(label => withinList(article(kol, label)))
+    }
   };
 })()`;
 async function snapshot() { return evaluate(SNAPSHOT); }
 async function choose(value) {
   await evaluate(`(() => { const select = document.querySelector('select'); if (!select || ![...select.options].some(o => o.value === ${JSON.stringify(value)})) throw new Error('scenario not found'); select.value = ${JSON.stringify(value)}; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-  const visible = value === "plan_review" ? "plan_review_visible" : "inbox_visible";
+  const visible = value === "plan_review" ? "plan_review_visible" : value === "kpi_truth" ? "kpi_truth.visible" : "inbox_visible";
   await waitFor(`(${SNAPSHOT}).scenario === ${JSON.stringify(value)} && (${SNAPSHOT}).${visible}`, `${value} visible`);
   await evaluate("window.scrollTo(0, 0)");
 }
@@ -102,16 +122,26 @@ async function fill(label, value) {
 }
 async function textInInbox(text) { await waitFor(`(${SNAPSHOT}).inbox_text.includes(${JSON.stringify(text)})`, text); }
 function executeCalls(proof) { return proof.events.filter((text) => text.includes("executeAction (synthetic)")).length; }
+async function scrollSyntheticKolTo(label) {
+  await evaluate(`(() => {
+    const kol = document.querySelector('[aria-label="真实 KPI 与消息组件 · 合成数据"] [aria-label="KOL Profile"]');
+    const row = [...(kol?.querySelectorAll('article') || [])].find(n => n.querySelector('strong')?.textContent === ${JSON.stringify(label)});
+    const list = row?.closest('.vkpi-evidence-list');
+    if (!row || !list) throw new Error('Synthetic KOL evidence not found');
+    list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    window.scrollTo(0, 0);
+  })()`);
+}
 async function record(name, check, screenshot = false) {
   const proof = await snapshot();
   assert(proof.synthetic_marker.includes("合成数据"));
   assert.equal(proof.style, "glass");
   assert.equal(proof.theme, "dark");
   assert.notEqual(proof.background, "rgb(255, 255, 255)");
-  assert(proof.scenario === "plan_review" ? proof.plan_review_visible : proof.inbox_visible && proof.market_visible,
+  assert(proof.scenario === "plan_review" ? proof.plan_review_visible : proof.scenario === "kpi_truth" ? proof.kpi_truth.visible : proof.inbox_visible && proof.market_visible,
     "Scenario's real components must have visible rectangles and opacity");
   assert(proof.isolation_text.includes("拒绝未知调用 0 次"));
-  check(proof);
+  await check(proof);
   const entry = { name, passed: true, proof };
   if (screenshot) {
     await evaluate("window.scrollTo(0, 0)");
@@ -219,10 +249,35 @@ try {
     assert(!p.buttons.some(b => /执行|批准|创建项目/.test(b.label)));
     assert.equal(p.events.length, 0, "Read-only plan projection must not invoke even mock action APIs");
   }, true);
+  await choose("kpi_truth");
+  await scrollSyntheticKolTo("manual");
+  await record("11-kpi-truth", async (p) => {
+    const truth = p.kpi_truth;
+    assert.equal(truth.workload, "待核验");
+    assert(!/987,?654/.test(truth.staff_text), "Explicit unknown workload must not fall back to legacy credit");
+    for (const row of truth.staff_rows) assert.equal(row.value, row.label.includes("零值") ? "0" : "待核验", row.label);
+    for (const row of truth.kol_rows) assert(row.text?.startsWith(`${row.label.includes("汇总") ? "累计" : "数值"} ${row.label.includes("零值") ? "0" : "待核验"}`), row.label);
+    assert(truth.manual_message.includes("【合成】手工回复说明"));
+    assert(truth.manual_message.includes("对方回复（手工记录）") && truth.manual_message.includes("收发未核验"));
+    assert(truth.manual_in_viewport, "Manual-record evidence must be visible in the unknown-workload screenshot");
+    assert.equal(p.events.length, 0, "Drawers must not invoke even mock action APIs");
+    const firstImage = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    p.unknown_screenshot = join(output, "11-kpi-truth-unknown.png");
+    writeFileSync(p.unknown_screenshot, Buffer.from(firstImage.data, "base64"), { mode: 0o600 });
+    await click("切换合成工作量为已核实 0");
+    await waitFor(`(${SNAPSHOT}).kpi_truth.workload === '0'`, "known-zero workload");
+    await scrollSyntheticKolTo("合成KOL来源：待核");
+    const zero = await snapshot();
+    assert.equal(zero.kpi_truth.workload, "0");
+    assert(zero.kpi_truth.kol_kpi_in_viewport, "KOL null/zero KPI evidence must be visible in the known-zero screenshot");
+    assert(zero.isolation_text.includes("拒绝未知调用 0 次"));
+    assert.equal(zero.events.length, 0);
+    p.known_zero_proof = zero.kpi_truth;
+  }, true);
   assert.equal(report.blocked_requests.length, 0, "Unexpected browser request attempted");
   assert.equal(report.console.filter(e => ["error", "exception"].includes(e.level)).length, 0, "Console error/exception observed");
   if (asynchronousError) throw asynchronousError;
-  report.passed = report.scenarios.length === 10;
+  report.passed = report.scenarios.length === 11;
 } catch (error) {
   report.failure = String(error?.message || error).slice(0, 2000);
   console.error(`Synthetic browser regression: ${report.failure}`);

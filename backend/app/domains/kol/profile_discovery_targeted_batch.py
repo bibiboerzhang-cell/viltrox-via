@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from copy import deepcopy
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -13,9 +14,80 @@ from app.domains.kol import (
     targeted_query_execution,
 )
 from app.domains.kol.discovery_filters import _int, _text
+from app.domains.kol.query_cell_result_coverage import (
+    choose_cell_round, new_cell_result_ledger, observe_cell_qualification,
+    record_cell_retrieval, summarize_cell_results,
+)
 
 logger = get_logger(__name__)
 Discover = Callable[..., Awaitable[dict[str, Any]]]
+
+
+def _result_ledger(query_cells: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
+    if "query_cell_results" not in state:
+        state["query_cell_results"] = new_cell_result_ledger(query_cells)
+    return state["query_cell_results"]
+
+
+def build_query_cell_round_observer(
+    *, query_cells: list[dict[str, Any]], state: dict[str, Any],
+) -> Callable[[dict[str, Any]], None]:
+    """Receive the collector's real post-gate, post-enrollment observations."""
+    from app.domains.kol.profile_recall_qualification import canonical_creator_key
+
+    ledger = _result_ledger(query_cells, state)
+
+    def observe(payload: dict[str, Any]) -> None:
+        accepted = [
+            {"canonical_key": canonical_creator_key(item), "cells": item.get("cell_qualification")}
+            for item in (payload.get("accepted") or []) if isinstance(item, dict)
+        ]
+        observe_cell_qualification(ledger, {**payload, "accepted": accepted})
+        budget = min(150, max(0, _int(payload.get("candidate_budget"), 150)))
+        state["targeted_collector_remaining"] = max(0, budget - _int(payload.get("budget_used")))
+        state["targeted_accepted_count"] = max(0, _int(payload.get("accepted_count")))
+
+    return observe
+
+
+def _round_selection(
+    *, query_cells: list[dict[str, Any]], state: dict[str, Any],
+    round_no: int, candidate_limit: int = 150,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    cache = state.setdefault("targeted_cell_round_selections", {})
+    cached = cache.get(str(round_no))
+    if isinstance(cached, dict):
+        return deepcopy(cached["cells"]), dict(cached["diagnostic"])
+    reserved = sum(_int(value) for value in (state.get("targeted_candidate_reservations") or {}).values())
+    remaining = min(max(0, candidate_limit), max(0, 150 - reserved),
+                    max(0, _int(state.get("targeted_collector_remaining"), 150)))
+    cells, diagnostic = choose_cell_round(
+        query_cells, ledger=_result_ledger(query_cells, state), round_no=round_no,
+        candidate_limit=remaining, accepted_count=_int(state.get("targeted_accepted_count")),
+    )
+    cache[str(round_no)] = {"cells": deepcopy(cells), "diagnostic": dict(diagnostic)}
+    return cells, diagnostic
+
+
+def _record_retrieval(query_cells: list[dict[str, Any]], state: dict[str, Any], batch: dict[str, Any]) -> None:
+    from app.domains.kol.profile_online_evidence import identity_probe
+    from app.domains.kol.profile_recall_qualification import canonical_creator_aliases, canonical_creator_key
+
+    candidates = []
+    for raw in batch.get("new_creators") or []:
+        if not isinstance(raw, dict):
+            continue
+        cells = raw.get("matched_query_cells")
+        cells = cells if isinstance(cells, list) else []
+        probe = identity_probe(raw)
+        candidates.append({
+            "canonical_key": canonical_creator_key(probe),
+            "aliases": sorted(canonical_creator_aliases(probe)),
+            "query_cell_ids": [_text(cell.get("query_cell_id")) for cell in cells if isinstance(cell, dict)],
+        })
+    record_cell_retrieval(
+        _result_ledger(query_cells, state), runs=batch.get("query_cell_runs"), candidates=candidates,
+    )
 
 
 def _forecast_rows(
@@ -219,8 +291,13 @@ def build_targeted_round_gate(
                 "reason": stopped_by,
                 "forecast": {},
             }
+        selected, diagnostic = _round_selection(query_cells=query_cells, state=state, round_no=round_no)
+        if not selected:
+            reason = diagnostic["reason"]
+            state["targeted_gate_stopped_by"] = reason
+            return {"allowed": False, "reason": reason, "forecast": {}}
         plan = targeted_query_execution.plan_query_cell_round(
-            query_cells=query_cells,
+            query_cells=selected,
             base_kwargs=discovery_kwargs,
             round_no=round_no,
         )
@@ -282,12 +359,24 @@ def finalize_online_result(
         }
     exhausted = bool(result.get("exhausted"))
     brief = search_brief if isinstance(search_brief, dict) else {}
+    coverage = summarize_cell_results(
+        query_cells, runs=state.get("query_cell_runs"), omitted_count=query_cells_omitted,
+        ledger=_result_ledger(query_cells, state),
+    )
+    omitted_runs = (state.get("query_cell_run_counters") or {}).get("omitted", 0)
+    if omitted_runs:
+        coverage["status"] = "partial"
+        coverage["run_observations_omitted"] = omitted_runs
+    result["query_cell_coverage"] = coverage
+    result["query_cell_round_selection"] = [
+        dict(value["diagnostic"]) for value in (state.get("targeted_cell_round_selections") or {}).values()
+    ]
     result["targeted_search"] = {
         "search_spec_version": _text(brief.get("search_spec_version")),
         "objective": _text(objective),
         "first_round_strategy": "independent_query_cells" if query_cells else "legacy_compat_query",
         "query_cells_requested": len(query_cells) + max(0, int(query_cells_omitted or 0)),
-        "query_cells_executed": len(query_cells),
+        "query_cells_executed": coverage["query_cells_executed"],
         "query_cells_omitted": max(0, int(query_cells_omitted or 0)),
         "fallback_queries_used": bool(state.get("fallback_queries_used")),
         "provider_rounds": (
@@ -322,20 +411,48 @@ async def fetch_targeted_round(
     state: dict[str, Any],
     favorite_identity_keys: set[str],
     discover: Discover,
+    candidate_limit: int = 150,
 ) -> dict[str, Any]:
     """Run one deterministic primary/fallback round and update diagnostics."""
 
+    selected, selection = _round_selection(
+        query_cells=query_cells, state=state, round_no=round_no, candidate_limit=candidate_limit,
+    )
+    if not selected or selection["raw_limit_total"] > max(0, candidate_limit):
+        reason = selection["reason"] if not selected else "candidate_budget_changed_after_preflight"
+        state["targeted_gate_stopped_by"] = reason
+        return {"status": "blocked", "provider_calls": False, "has_more": False,
+                "new_creators": [], "query_cell_runs": [], "provider_gate": {"allowed": False, "reason": reason}}
+
+    def authorize(plan: dict[str, Any]) -> dict[str, Any]:
+        reservations = state.setdefault("targeted_candidate_reservations", {})
+        if str(round_no) in reservations:
+            return {"allowed": False, "reason": "targeted_round_already_reserved"}
+        verdict = preflight_targeted_round(plan, plan_legs=plan_legs, state=state)
+        if verdict.get("allowed") is True:
+            reservations[str(round_no)] = selection["raw_limit_total"]
+        return verdict
+
     batch = await targeted_query_execution.execute_query_cell_round(
-        query_cells=query_cells,
+        query_cells=selected,
         base_kwargs=discovery_kwargs,
         discover=discover,
         round_no=round_no,
-        before_provider_calls=lambda plan: preflight_targeted_round(
-            plan,
-            plan_legs=plan_legs,
-            state=state,
-        ),
+        before_provider_calls=authorize,
     )
+    _record_retrieval(query_cells, state, batch)
+    if batch.get("targeted_round_complete") is True:
+        next_plan = targeted_query_execution.plan_query_cell_round(
+            query_cells=query_cells, base_kwargs=discovery_kwargs, round_no=round_no,
+        )
+        batch["has_more"] = bool(next_plan["has_more"] and round_no < 3)
+        batch["next_cursor"] = dict(next_plan["next_cursor"]) if batch["has_more"] else {}
+    runs = state.setdefault("query_cell_runs", [])
+    observed_runs = [row for row in (batch.get("query_cell_runs") or []) if isinstance(row, dict)]
+    remaining = max(0, 32 - len(runs))
+    runs.extend(deepcopy(observed_runs[:remaining]))
+    counters = state.setdefault("query_cell_run_counters", {})
+    counters["omitted"] = _int(counters.get("omitted")) + max(0, len(observed_runs) - remaining)
     if batch.get("status") == "blocked":
         gate = batch.get("provider_gate") if isinstance(batch.get("provider_gate"), dict) else {}
         reason = _text(gate.get("reason")) or "targeted_round_gate_denied"
@@ -380,6 +497,7 @@ fetch_targeted_first_round = fetch_targeted_round
 
 
 __all__ = [
+    "build_query_cell_round_observer",
     "build_pipeline_round_gate",
     "build_targeted_round_gate",
     "exhaustion_reason",

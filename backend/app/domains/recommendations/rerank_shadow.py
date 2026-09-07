@@ -23,6 +23,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
+from app.domains.recommendations.communication_evidence import LABEL_SEMANTICS_VERSION
 from app.shared.vkpi_utils import utcnow_iso
 
 logger = get_logger(__name__)
@@ -270,6 +271,8 @@ def load_active_model() -> dict[str, Any] | None:
     model = dict(row)
     model["weights"] = loads(model.get("weights"), {})
     model["metrics"] = loads(model.get("metrics"), {})
+    if not isinstance(model["metrics"], dict) or model["metrics"].get("label_semantics_version") != LABEL_SEMANTICS_VERSION:
+        return None  # Legacy transport/silence labels are not eligible; no historical DB rewrite.
     if str(model.get("feature_keys_version") or "") != FEATURE_KEYS_VERSION:
         logger.warning("rerank_shadow.model_feature_version_mismatch version=%s", model.get("model_version"))
         return None

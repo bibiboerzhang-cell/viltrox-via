@@ -302,6 +302,9 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     const searchCall = apiFetchMock.mock.calls.find((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search");
     const body = JSON.parse(String((searchCall?.[1] as RequestInit | undefined)?.body || "{}"));
     expect(body).toMatchObject({
+      search_mode: "hybrid",
+      include_new_discovery: true,
+      execute_new_discovery: true,
       result_limit: 30,
       search_strategy: "vertical",
       languages: ["ja"],
@@ -317,16 +320,11 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
       },
       bucket_policy: { core_vertical: 24, expansion: 5, exploration: 1 },
     });
-    await waitFor(() => {
-      expect(apiFetchMock.mock.calls.some((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search/profile-advance-job")).toBe(true);
-    });
-    const advanceCall = apiFetchMock.mock.calls.find((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search/profile-advance-job");
-    const advanceBody = JSON.parse(String((advanceCall?.[1] as RequestInit | undefined)?.body || "{}"));
-    expect(advanceBody).toMatchObject({
-      languages: ["ja"],
-      local_qualification_spec: { languages: ["ja"] },
-      filters: { countries: ["JP"], languages: ["ja"] },
-    });
+    // Both lanes now share this authorized request; an old/missing acceptance
+    // response must not silently trigger another provider-capable POST.
+    expect(body.online_qualification_spec).toMatchObject({ version: "online_net_new_30_v1", target_count: 30 });
+    expect(apiFetchMock.mock.calls.filter((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search")).toHaveLength(1);
+    expect(apiFetchMock.mock.calls.filter((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search/profile-advance-job")).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "筛选 · 排序" }));
     expect(screen.getAllByRole("button", { name: /垂直优先/ }).some((node) => node.getAttribute("aria-pressed") === "true" || node.getAttribute("style")?.includes("background"))).toBe(true);
   });

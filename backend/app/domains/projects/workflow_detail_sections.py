@@ -199,8 +199,10 @@ def fetch_cost_context(
 
 
 def fetch_content_context(conn: Any, project_id: int) -> dict[str, Any]:
+    from app.shared.message_truth import project_message_record
+
     messages = [
-        dict(item)
+        project_message_record(item)
         for item in conn.execute(
             "SELECT * FROM vkpi_messages WHERE project_id=? ORDER BY captured_at DESC, id DESC",
             (int(project_id),),

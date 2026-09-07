@@ -640,22 +640,7 @@ def resolve_named_product_family(query: str) -> dict[str, Any] | None:
     )
 
 
-def _unique_exact_sku_product(
-    products: Any,
-    value: Any,
-) -> dict[str, Any] | None:
-    """Return one exact normalized SKU row without accepting fuzzy matches."""
-    normalized = _normkey(value)
-    if not normalized:
-        return None
-    matches = [
-        product
-        for product in (products or [])
-        if isinstance(product, dict)
-        and not str(product.get("sku") or "").upper().startswith("IMAGE-AWARDS")
-        and _normkey(product.get("sku")) == normalized
-    ]
-    return matches[0] if len(matches) == 1 else None
+_unique_exact_sku_product = resolver_catalog.unique_exact_sku_product
 
 
 def _resolve_product_sku_or_raise(value: Any) -> dict[str, Any] | None:
@@ -716,6 +701,11 @@ def _resolve_product_or_raise(query: str) -> dict[str, Any] | None:
     """Resolve free text while allowing catalog dependency errors to surface."""
     if len(_query_focals(query)) > 1:
         return None
+    handled, exact = resolver_catalog.embedded_sku_resolution(
+        query, catalog_reader=list_product_catalog, apply_constraints=_apply_hard_constraints,
+    )
+    if handled:
+        return exact
     alias_match = resolver_catalog.matched_product_alias(query)
     if alias_match is not None:
         # A recognised, more-specific alias owns the decision.  If its

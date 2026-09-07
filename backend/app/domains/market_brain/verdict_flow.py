@@ -34,6 +34,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains.market_brain.communication_projection import project_public_outcomes
 
 logger = get_logger(__name__)
 
@@ -813,10 +814,7 @@ def list_outcomes(decision: str | None = None, limit: int = 50) -> dict[str, Any
     finalized = int(final_stats.get("finalized") or 0)
     evidence_backed = int(final_stats.get("evidence_backed") or 0)
     readiness = build_learning_readiness(conn=conn)
-    for item in items:
-        item["claimable"] = bool(readiness.get("claimable")) and bool(
-            item.get("finalized") and item.get("evidence_backed")
-        )
+    items = project_public_outcomes(items, readiness.get("claimable"))
 
     return {
         "status": "ready",

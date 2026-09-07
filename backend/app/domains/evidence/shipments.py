@@ -7,6 +7,7 @@ from app.db.connection import get_conn
 from app.domains import audit
 from app.domains.access import scope
 from app.domains.projects import workflow
+from app.domains.projects import shipment_write_guard as shipping_guard
 from app.domains.evidence.common import (
     _actor_id,
     _assert_kol_access,
@@ -94,6 +95,15 @@ def update_shipment(shipment_id: int, body: dict[str, Any], *, staff: dict[str, 
     ensure_vkpi_schema()
     item = _assert_shipment_access(int(shipment_id), staff, write=True)
     conn = get_conn()
+    project_id = int(item["project_id"])
+    shipping_guard.lock_row(conn, "vkpi_projects", project_id)
+    item = shipping_guard.lock_row(conn, "vkpi_shipments", shipment_id)
+    if int(item["project_id"]) != project_id:
+        raise ValueError("shipment_identity_changed")
+    changes = {key: body[key] for key in ("tracking_number", "status", "sample_status", "shipped_at") if key in body}
+    if body.get("shipping_status") and not body.get("status"):
+        changes["status"] = body["shipping_status"]
+    shipping_guard.guard_shipment_change(conn, item, changes, staff=staff)
     now = _utcnow()
     conn.execute(
         """
@@ -113,7 +123,7 @@ def update_shipment(shipment_id: int, body: dict[str, Any], *, staff: dict[str, 
             body.get("delivered_at", item.get("delivered_at")),
             str(body.get("evidence_url") if body.get("evidence_url") is not None else item.get("evidence_url") or ""),
             str(body.get("note") if body.get("note") is not None else item.get("note") or ""),
-            _json(body.get("metadata")),
+            _json(shipping_guard.preserve_subject_metadata(item, body.get("metadata"))),
             now,
             int(shipment_id),
         ),

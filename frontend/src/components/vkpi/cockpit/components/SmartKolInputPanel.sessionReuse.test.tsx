@@ -41,20 +41,51 @@ describe("Smart KOL preview session reuse", () => {
     domainMocks.smartKolSearchProfileAdvanceJob.mockResolvedValue({ status: "queued" });
   });
 
-  it("reuses preview session A for its automatic continuation but not for a manual re-filter", async () => {
+  it("never re-submits a preview response and gives a manual re-filter a new queue request", async () => {
     render(<SmartKolInputPanel apiToken="token" />);
     fireEvent.change(screen.getByTestId("smart-kol-input"), { target: { value: "35mm portrait" } });
     fireEvent.click(screen.getByTestId("smart-kol-run"));
 
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(1));
-    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[0][2]).toMatchObject({ sessionId: 701 });
+    await waitFor(() => expect(screen.getByTestId("smart-kol-run")).not.toBeDisabled());
+    expect(domainMocks.smartKolSearch).toHaveBeenCalledTimes(1);
+    expect(domainMocks.smartKolSearch.mock.calls[0][2]).toMatchObject({ searchMode: "hybrid" });
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "重新全网查找" }));
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(2));
-    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[1][2]).not.toHaveProperty("sessionId");
+    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(1));
+    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[0][2]).not.toHaveProperty("sessionId");
   });
 
-  it("continues a clarification choice through preview and queued discovery with the canonical SKU", async () => {
+  it("reloads a known queued session id before its first detail snapshot without resubmitting", async () => {
+    writePersistedSearchDisplay({ input: "street photographers", mode: "text", recallResult: null,
+      urlResult: null, activeSearchSession: null, activeSearchSessionId: 901 }, "account-id-only");
+    domainMocks.getKolSearchSession.mockResolvedValue({ id: 901, query_text: "street photographers",
+      query_type: "text_recall", status: "partial", items: [], result_summary: {} });
+    render(<SmartKolInputPanel apiToken="token" accountId="account-id-only" />);
+    await waitFor(() => expect(domainMocks.getKolSearchSession).toHaveBeenCalledWith("token", 901));
+    expect(domainMocks.smartKolSearch).not.toHaveBeenCalled();
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).not.toHaveBeenCalled();
+  });
+
+  it("rapid repeated primary and network clicks do not send duplicate pending requests", async () => {
+    domainMocks.smartKolSearch.mockImplementation(() => new Promise(() => {}));
+    domainMocks.smartKolSearchProfileAdvanceJob.mockImplementation(() => new Promise(() => {}));
+    const view = render(<SmartKolInputPanel apiToken="token" />);
+    await act(async () => {});
+    fireEvent.change(screen.getByTestId("smart-kol-input"), { target: { value: "street photographers" } });
+    fireEvent.click(screen.getByTestId("smart-kol-run"));
+    fireEvent.click(screen.getByTestId("smart-kol-run"));
+    expect(domainMocks.smartKolSearch).toHaveBeenCalledTimes(1);
+    view.unmount();
+    render(<SmartKolInputPanel apiToken="token" />);
+    await act(async () => {});
+    fireEvent.change(screen.getByTestId("smart-kol-input"), { target: { value: "street photographers" } });
+    fireEvent.click(screen.getByTestId("smart-kol-fresh-network"));
+    fireEvent.click(screen.getByTestId("smart-kol-fresh-network"));
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a confirmed clarification SKU in the single hybrid submission", async () => {
     const clarificationPlan = {
       status: "needs_clarification",
       original_query: "找 35 evo 摄影师",
@@ -88,11 +119,8 @@ describe("Smart KOL preview session reuse", () => {
     fireEvent.click(await screen.findByRole("button", { name: "选择产品 AF 35mm F1.8 EVO 并自动继续搜索" }));
     await waitFor(() => expect(domainMocks.smartKolSearch).toHaveBeenCalledTimes(2));
     expect(domainMocks.smartKolSearch.mock.calls[1][2]).toMatchObject({ productSku: "AF-35-EVO" });
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(1));
-    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[0][2]).toMatchObject({
-      productSku: "AF-35-EVO",
-      sessionId: 702,
-    });
+    expect(domainMocks.smartKolSearch.mock.calls[1][2]).toMatchObject({ productSku: "AF-35-EVO", searchMode: "hybrid" });
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).not.toHaveBeenCalled();
   });
 
   it("does not apply an old clarification SKU after the operator edits the query", async () => {
@@ -157,7 +185,7 @@ describe("Smart KOL preview session reuse", () => {
     expect(domainMocks.getKolSearchSession).toHaveBeenCalledTimes(1);
   });
 
-  it("passes a product resolved by the current preview into its first automatic continuation", async () => {
+  it("does not turn a server-resolved product response into a second paid submission", async () => {
     domainMocks.smartKolSearch.mockResolvedValueOnce({
       status: "ready",
       mode: "text",
@@ -176,14 +204,12 @@ describe("Smart KOL preview session reuse", () => {
     fireEvent.change(screen.getByTestId("smart-kol-input"), { target: { value: "DC-X2 monitor filmmakers" } });
     fireEvent.click(screen.getByTestId("smart-kol-run"));
 
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(1));
-    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[0][2]).toMatchObject({
-      productSku: "DC-X2",
-      sessionId: 703,
-    });
+    await waitFor(() => expect(screen.getByTestId("smart-kol-run")).not.toBeDisabled());
+    expect(domainMocks.smartKolSearch.mock.calls[0][1]).toBe("DC-X2 monitor filmmakers");
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).not.toHaveBeenCalled();
   });
 
-  it("uses each preview's immutable SKU across consecutive natural product searches", async () => {
+  it("sends each natural product query once without copying the previous response SKU", async () => {
     domainMocks.smartKolSearch
       .mockResolvedValueOnce({
         status: "ready",
@@ -210,14 +236,16 @@ describe("Smart KOL preview session reuse", () => {
     const input = screen.getByTestId("smart-kol-input");
     fireEvent.change(input, { target: { value: "Z1 Pro flash wedding photographers" } });
     fireEvent.click(screen.getByTestId("smart-kol-run"));
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId("smart-kol-run")).not.toBeDisabled());
 
     fireEvent.change(input, { target: { value: "DC-X2 monitor filmmakers" } });
     fireEvent.click(screen.getByTestId("smart-kol-run"));
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(2));
-
-    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[0][2]).toMatchObject({ productSku: "Z1-PRO" });
-    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[1][2]).toMatchObject({ productSku: "DC-X2" });
+    await waitFor(() => expect(domainMocks.smartKolSearch).toHaveBeenCalledTimes(2));
+    expect(domainMocks.smartKolSearch.mock.calls.map((call) => call[1])).toEqual([
+      "Z1 Pro flash wedding photographers", "DC-X2 monitor filmmakers",
+    ]);
+    expect(domainMocks.smartKolSearch.mock.calls[1][2].productSku).toBeUndefined();
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).not.toHaveBeenCalled();
   });
 
   it("does not carry a previous product into a following people-only search", async () => {
@@ -247,14 +275,14 @@ describe("Smart KOL preview session reuse", () => {
     const input = screen.getByTestId("smart-kol-input");
     fireEvent.change(input, { target: { value: "Z1 Pro flash wedding photographers" } });
     fireEvent.click(screen.getByTestId("smart-kol-run"));
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId("smart-kol-run")).not.toBeDisabled());
 
     fireEvent.change(input, { target: { value: "wedding photographers" } });
     fireEvent.click(screen.getByTestId("smart-kol-run"));
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(2));
-
-    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[0][2]).toMatchObject({ productSku: "Z1-PRO" });
-    expect(domainMocks.smartKolSearchProfileAdvanceJob.mock.calls[1][2]).not.toHaveProperty("productSku");
+    await waitFor(() => expect(domainMocks.smartKolSearch).toHaveBeenCalledTimes(2));
+    expect(domainMocks.smartKolSearch.mock.calls[1][1]).toBe("wedding photographers");
+    expect(domainMocks.smartKolSearch.mock.calls[1][2].productSku).toBeUndefined();
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).not.toHaveBeenCalled();
   });
 
   it("restores historical text recall as view-only until the current filters are re-run", async () => {
@@ -279,7 +307,8 @@ describe("Smart KOL preview session reuse", () => {
     expect(screen.getByTestId("smart-kol-input")).toHaveValue("35mm portrait");
 
     fireEvent.click(screen.getByTestId("smart-kol-run"));
-    await waitFor(() => expect(domainMocks.smartKolSearchProfileAdvanceJob).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(domainMocks.smartKolSearch).toHaveBeenCalledTimes(1));
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByText(/下方是上一轮结果，仅供参考且不可批准/)).toBeNull());
   });
 });

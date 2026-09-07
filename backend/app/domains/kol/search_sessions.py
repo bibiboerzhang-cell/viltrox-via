@@ -17,6 +17,9 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol.contact_access import mask_contact_payload
 from app.domains.kol import search_session_diagnostics
+from app.domains.kol.search_execution_observation import confirmed_execution_failure
+from app.domains.kol.search_execution_fence import permits_write, resolve_fence, require_applied, superseded_result, validate_execution_start, bind_patch_observation
+from app.domains.kol.search_sessions_attachment_status import _attached_result_count, _persist_attached_status
 
 logger = get_logger(__name__)
 
@@ -468,12 +471,15 @@ def update_session_result_summary(
     *,
     status: str,
     summary_patch: dict[str, Any],
+    expected_execution_id: str | None = None,
+    expected_job_id: int | None = None,
+    start_execution: bool = False,
 ) -> dict[str, Any]:
     """Merge a small orchestration summary into one search session."""
 
     conn = get_conn()
     row = conn.execute(
-        "SELECT result_summary_json FROM vkpi_kol_search_sessions WHERE id=?",
+        "SELECT result_summary_json, status FROM vkpi_kol_search_sessions WHERE id=? FOR NO KEY UPDATE",
         (int(session_id),),
     ).fetchone()
     if not row:
@@ -481,7 +487,20 @@ def update_session_result_summary(
     summary = _loads(dict(row).get("result_summary_json"), {})
     if not isinstance(summary, dict):
         summary = {}
+    fence = resolve_fence(session_id, expected_execution_id, expected_job_id)
+    if not start_execution and (not permits_write(summary, session_id, fence) or confirmed_execution_failure(summary)):
+        conn.commit()
+        current = _row_to_session({"id": session_id, **dict(row)})
+        return {**current, "status": "failed" if confirmed_execution_failure(summary) else current.get("status"),
+                "write_applied": False, "write_reason": "search_execution_not_current"}
     patch = dict(_dict(summary_patch))
+    if start_execution:
+        validate_execution_start(patch)
+    else:
+        patch.pop("search_execution_id", None)
+        patch.pop("search_execution_job_id", None)
+    if fence is not None and not start_execution:
+        bind_patch_observation(patch, fence)
     if "llm_query_plan" in patch:
         safe_plan = _safe_llm_query_plan(patch.get("llm_query_plan"))
         if safe_plan:
@@ -490,6 +509,9 @@ def update_session_result_summary(
             patch.pop("llm_query_plan", None)
             summary.pop("llm_query_plan", None)
     summary.update(patch)
+    if confirmed_execution_failure(summary):
+        status = "failed"
+        summary["phase"] = "failed"
     if "llm_query_plan" in summary:
         safe_plan = _safe_llm_query_plan(summary.get("llm_query_plan"))
         if safe_plan:
@@ -526,37 +548,9 @@ def update_session_result_summary(
     return _row_to_session(updated)
 
 
-def _attached_result_count(result: dict[str, Any]) -> int:
-    items = result.get("items")
-    if isinstance(items, list) and items:
-        return len(items)
-    buckets = result.get("buckets") if isinstance(result.get("buckets"), dict) else {}
-    bucket_count = sum(len(value) for value in buckets.values() if isinstance(value, list))
-    return bucket_count if bucket_count else len(items or [])
-
-
-def _persist_attached_status(
-    session_id: int,
-    recorded: dict[str, Any],
-    *,
-    status: str,
-    result_state: str,
-) -> dict[str, Any]:
-    normalized = _normalize_status(status)
-    if _text(recorded.get("status")).lower() == normalized:
-        return recorded
-    updated = update_session_result_summary(
-        int(session_id),
-        status=normalized,
-        summary_patch={"result_state": result_state},
-    )
-    recorded["status"] = updated.get("status") or normalized
-    if isinstance(recorded.get("result_summary"), dict):
-        recorded["result_summary"]["result_state"] = result_state
-    return recorded
-
-
-def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+def attach_recall_result(session_id: int, result: dict[str, Any], *, lane_only: bool = False) -> dict[str, Any]:
+    if lane_only:
+        return _attach_recall_result(int(session_id), result, lane_only=True)
     recorded = _attach_recall_result(int(session_id), result)
     upstream_status = _text(result.get("status")).lower()
     item_count = len(recorded.get("items") or [])
@@ -582,7 +576,9 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     return _persist_attached_status(int(session_id), recorded, status=desired, result_state=state)
 
 
-def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+def attach_new_discovery_result(session_id: int, result: dict[str, Any], *, lane_only: bool = False) -> dict[str, Any]:
+    if lane_only:
+        return _attach_new_discovery_result(int(session_id), result, lane_only=True)
     recorded = _attach_new_discovery_result(int(session_id), result)
     upstream_status = _text(result.get("status")).lower()
     recorded_count = len(recorded.get("items") or [])
@@ -606,7 +602,9 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
     return _persist_attached_status(int(session_id), recorded, status=desired, result_state=state)
 
 
-def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+def attach_online_qualified_result(session_id: int, result: dict[str, Any], *, lane_only: bool = False) -> dict[str, Any]:
+    if lane_only:
+        return _attach_online_qualified_result(int(session_id), result, lane_only=True)
     recorded = _attach_online_qualified_result(int(session_id), result)
     if bool(result.get("_session_pipeline_running")):
         updated = update_session_result_summary(
@@ -708,6 +706,53 @@ def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, 
     return _upsert_item_impl(conn, session_id, item)
 
 
+def update_search_lane(session_id: int, *, lane: str, status: str,
+                       returned_count: int | None = None, reason: str | None = None,
+                       execution_id: str | None = None, expected_execution_id: str | None = None,
+                       expected_job_id: int | None = None) -> None:
+    from app.domains.kol.search_sessions_lanes import write_lane_summary
+
+    conn = get_conn()
+    changed = write_lane_summary(conn, int(session_id), lane=lane, status=status,
+                       returned_count=returned_count, reason=reason, execution_id=execution_id,
+                       expected_execution_id=expected_execution_id, expected_job_id=expected_job_id)
+    conn.commit()
+    if changed is False and resolve_fence(session_id, expected_execution_id, expected_job_id) is not None:
+        require_applied(superseded_result(session_id))
+
+
+def interrupt_search_lanes(session_id: int, *, execution_id: str, reason: str) -> bool:
+    from app.domains.kol.search_sessions_lanes import write_interrupted_lanes
+
+    conn = get_conn()
+    changed = write_interrupted_lanes(conn, int(session_id), execution_id=execution_id, reason=reason)
+    conn.commit()
+    return changed
+
+
+def fail_search_execution(session_id: int, *, execution_id: str, job_id: int, reason: str, error: str) -> bool:
+    from app.domains.kol.search_sessions_lanes import write_execution_failure
+
+    conn = get_conn()
+    changed = write_execution_failure(conn, int(session_id), execution_id=execution_id,
+                                      job_id=job_id, reason=reason, error=error)
+    conn.commit()
+    return changed
+
+
+def record_lane_items(session_id: int, items: list[dict[str, Any]], *, lane: str,
+                      status: str, summary: dict[str, Any]) -> dict[str, Any]:
+    from app.domains.kol.search_sessions_lanes import write_lane_summary
+
+    def update_lane(conn: Any, sid: int, *, status: str, summary: dict[str, Any]) -> None:
+        write_lane_summary(conn, sid, lane=lane, status=status,
+                           returned_count=int(summary.get("items_written", len(items))), summary=summary)
+
+    return require_applied(_record_items(session_id, items, status=status, summary={**summary, "items_written": len(items)},
+                         get_conn_fn=get_conn, upsert_item_fn=_upsert_item,
+                         update_session_fn=update_lane))
+
+
 def record_items(
     session_id: int,
     items: list[dict[str, Any]],
@@ -724,6 +769,7 @@ def record_items(
         upsert_item_fn=_upsert_item,
         update_session_fn=_update_session,
     )
+    require_applied(recorded)
     session_view = {
         "id": int(session_id),
         "status": _normalize_status(status),

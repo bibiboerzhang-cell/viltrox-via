@@ -147,7 +147,7 @@ def test_message_and_favorite_sync_bridge(monkeypatch) -> None:
     monkeypatch.setattr(outcomes, "record_if_missing", lambda rec_id, node, **kw: applied.append((rec_id, node)) or True)
     msg = outcome_sync.sync_message_outcomes()
     assert msg["scanned"] == 3 and msg["ambiguous"] == 1 and msg["no_recommendation"] == 0
-    assert (77, "reply_received") in applied and (77, "outreach_sent") in applied and (78, "outreach_sent") in applied
+    assert msg["changed"] == 0 and applied == []  # Even a permissive record mock cannot upgrade raw messages.
     feedback_calls: list[tuple[int, str, Any]] = []
     monkeypatch.setattr(rec_actions, "_record_action_feedback_once",
                         lambda rec_id, ftype, payload, *, staff=None, note="": feedback_calls.append((rec_id, ftype, staff)) or True)

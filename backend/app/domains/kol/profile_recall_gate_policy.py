@@ -61,5 +61,8 @@ def build_gate_policy(
         max_video_age_days=maximum_video_age_days,
         fresh_priority_days=fresh_priority_days,
         gate_schema=gate_schema,
+        language_mode=str(language_filter.get("mode") or "require"),
+        geo_constraints=dict(_mapping(policy.get("geo_constraints"))),
+        provider_discovery_policy=policy.get("provider_discovery_policy"),
     )
     return gate_policy, unknown_activity

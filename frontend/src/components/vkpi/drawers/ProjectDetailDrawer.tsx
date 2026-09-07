@@ -5,6 +5,7 @@ import { currencyFormatter, numberFormatter } from '../shared/vkpiFormatters';
 import { coerceProjectStage, safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { primaryStageFlow, stageLabels } from '../shared/vkpiConstants';
 import { ProjectEvidenceForms } from './ProjectEvidenceForms';
+import { messageRecordDirectionLabel } from './messageRecordPresentation';
 import { getAnalysisCache, type VkpiAnalysisCacheEntry } from '../../../services/vkpi/projects-api';
 
 function parseProjectMetadata(value: unknown): Record<string, unknown> {
@@ -449,7 +450,7 @@ export function ProjectDetailDrawer({
             <article key={`message-${String(row.id || row.created_at || Math.random())}`}>
               <div><strong>{textValue(row.source, 'manual')}</strong><span>{textValue(row.captured_at || row.created_at, '-')}</span></div>
               <p>{textValue(row.snippet || row.body, '无内容')}</p>
-              <em>{textValue(row.direction, '-')} · {row.evidence_url ? <EvidenceLink value={row.evidence_url} /> : '无证据链接'}</em>
+              <em>{messageRecordDirectionLabel(row.direction)} · 收发未核验 · {row.evidence_url ? <EvidenceLink value={row.evidence_url} /> : '无证据链接'}</em>
             </article>
           )}
         </DetailList>

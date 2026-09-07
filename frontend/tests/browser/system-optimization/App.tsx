@@ -6,6 +6,7 @@ import { GtmKpiBand, SignalsBody } from "../../../src/components/vkpi/cockpit/pa
 import { CampaignPlanReadiness } from "../../../src/components/vkpi/pages/CampaignPlanReadiness";
 import { CampaignPlanPresentation } from "../../../src/components/vkpi/pages/CampaignPlanPresentation";
 import { I18nContext, makeT } from "../../../src/components/vkpi/cockpit/lib/i18n";
+import { KpiTruthFixture } from "./KpiTruthFixture";
 import { FIXTURE_TOKEN, SCENARIOS, getSnapshot, inboxSnapshot, marketSummary, planningOutput, planningReviewOutput, resetScenario, setReadFailure, subscribe, type Scenario } from "./fixture-state";
 import "../../../src/styles/global.css";
 import "../../../src/styles/tokens.css";
@@ -33,7 +34,7 @@ function Fixture() {
         {snapshot.readsFail ? "恢复合成读取（再手动刷新组件）" : "模拟读取失败（再手动刷新组件）"}
       </button> : null}
     </section>
-    {snapshot.scenario === "plan_review" ? <section className="fixture-panel" aria-label="真实规划审阅组件 · 合成数据">
+    {snapshot.scenario === "kpi_truth" ? <KpiTruthFixture key={snapshot.epoch} /> : snapshot.scenario === "plan_review" ? <section className="fixture-panel" aria-label="真实规划审阅组件 · 合成数据">
       <h2>CampaignPlanPresentation · 合成规划草案</h2>
       <CampaignPlanReadiness output={planningReviewOutput} />
       <CampaignPlanPresentation output={planningReviewOutput} />

@@ -1,7 +1,7 @@
-"""波 C·C4:人工写口 → 训练信号 插桩(recommendations.pool_action_bridge)。
+"""人工写口 → 运营偏好反馈;消息留档不等于外联事实。
 
 五个真实人工写口(项目自动收藏 / 加入项目触达 / 分组共享成员 / 派单 stage=contacted /
-外联消息即时桥)各验两件事:
+手工消息留档):运营动作各验两件事,消息留档则不生成收发反馈:
   1. 主写提交后恰好调用一次 actions.record_pool_action_feedback(动作 + payload 口径正确);
   2. 桥抛异常时主写结果不变、只记 warning(不静默、不阻断)。
 全部用查询路由型假连接,零真库、零 LLM。
@@ -118,21 +118,19 @@ def test_bridge_pool_action_never_raises_and_recovers_connection(bridge_env, cap
     assert rec2.calls[-1]["payload"] == {"source": "cron", "actor": "system"}
 
 
-def test_bridge_message_outreach_direction_and_pool_resolution(bridge_env):
+@pytest.mark.parametrize("direction", [None, "", "outbound", "inbound", "reply", "internal_note", "unexpected"])
+@pytest.mark.parametrize("source", ["manual", "email", "provider_verified"])
+def test_raw_message_bridge_never_infers_transport(bridge_env, monkeypatch, direction, source):
     from app.domains.recommendations import pool_action_bridge
 
-    conn = _RoutedConn([
-        ("FROM vkpi_kol_pool WHERE linked_main_kol_id=?", [{"id": 41}, {"id": 42}]),
-    ])
-    rec = bridge_env(conn)
-    # inbound:闭集无对应动作 → 诚实跳过(留给每日 sync_message_outcomes)
-    assert pool_action_bridge.bridge_message_outreach(message_id=1, project_id=5, kol_id=77, direction="inbound") == []
+    conn = _RoutedConn([])
+    rec = bridge_env(conn, fail=True)
+    monkeypatch.setattr(pool_action_bridge, "get_conn", lambda: pytest.fail("raw-message bridge must not query DB"))
+    assert pool_action_bridge.bridge_message_outreach(
+        message_id=1, project_id=5, kol_id=77, direction=direction, staff={"id": 2}, source=source,
+    ) == []
     assert rec.calls == []
-    # outbound:kol_id → linked_main_kol_id 桥到池,每个池项一次 "outreach"
-    out = pool_action_bridge.bridge_message_outreach(message_id=1, project_id=5, kol_id=77, direction="outbound", staff={"id": 2}, source="t")
-    assert len(out) == 2 and [c["kol_pool_id"] for c in rec.calls] == [41, 42]
-    assert all(c["action"] == "outreach" for c in rec.calls)
-    assert rec.calls[0]["payload"] == {"message_id": 1, "direction": "outbound", "project_id": 5, "kol_id": 77, "source": "t"}
+    assert conn.sql == [] and conn.commits == conn.rollbacks == 0
 
 
 # ── 1) 项目自动收藏 + 触达:workflow_projects_kols.add_project_kols ─────────
@@ -228,6 +226,7 @@ def test_staff_group_member_expansion_bridges_favorite_member(monkeypatch, bridg
 def _assignment_conn() -> _RoutedConn:
     base = {"id": 55, "project_id": 3, "kol_pool_id": 31, "stage": "discovered", "stage_status": "active", "metadata_json": "{}"}
     return _RoutedConn([
+        ("SELECT * FROM vkpi_projects WHERE id=?", [{"id": 3, "kol_id": None}]),
         ("SELECT * FROM vkpi_project_kol_assignments WHERE id=?", [{**base, "stage": "contacted"}]),
         ("SELECT * FROM vkpi_project_kol_assignments WHERE project_id=?", [base]),
     ])
@@ -268,19 +267,22 @@ def test_advance_assignment_other_stage_does_not_bridge(monkeypatch, bridge_env)
     wf = _evidence_env(monkeypatch, conn)
     rec = bridge_env(conn)
     wf.advance_project_kol_assignment(3, 55, {"to_stage": "replied"}, staff={"id": 4})
-    assert rec.calls == []  # 只插 contacted;其余阶段留给每日 sync_assignment_outcomes
+    assert rec.calls == []  # No preference bridge for this stage; stage alone is not a receipt.
 
 
 # ── 4) 外联消息即时桥:evidence/messages.create_message ────────────────────
 def _message_conn(kol_id: int = 77) -> _RoutedConn:
     return _RoutedConn([
-        ("INSERT INTO vkpi_messages", lambda p: [{"id": 900, "project_id": p[0], "kol_id": p[1], "direction": p[4]}]),
+        ("INSERT INTO vkpi_messages", lambda p: [{"id": 900, "project_id": p[0], "kol_id": p[1],
+                                                 "source": p[3], "direction": p[4], "body": p[7],
+                                                 "metadata_json": p[12]}]),
         ("FROM vkpi_kol_pool WHERE linked_main_kol_id=?", lambda p: [{"id": 61}] if int(p[0]) == kol_id else []),
     ])
 
 
-@pytest.mark.parametrize("fail", [False, True])
-def test_create_message_bridges_outbound_outreach(monkeypatch, bridge_env, caplog, fail):
+@pytest.mark.parametrize("direction", ["outbound", "inbound", "internal_note"])
+@pytest.mark.parametrize("source", ["manual", "email", "provider_verified"])
+def test_create_message_preserves_manual_record_without_transport_feedback(monkeypatch, bridge_env, caplog, direction, source):
     from app.domains.evidence import messages
 
     conn = _message_conn()
@@ -288,22 +290,22 @@ def test_create_message_bridges_outbound_outreach(monkeypatch, bridge_env, caplo
     monkeypatch.setattr(messages, "get_conn", lambda: conn)
     monkeypatch.setattr(messages, "_project_context", lambda *_a, **_k: {"kol_id": 77})
     monkeypatch.setattr(messages.audit, "log_business_event", lambda **_k: None)
-    rec = bridge_env(conn, fail=fail)
+    rec = bridge_env(conn, fail=True)
     with caplog.at_level(logging.WARNING):
-        item = messages.create_message({"project_id": 5, "body": "hi"}, staff={"id": 2})
+        item = messages.create_message({"project_id": 5, "body": "manual contract discussion",
+                                        "direction": direction, "source": source,
+                                        "metadata": {"verified": True, "provider_message_id": "client-value"}}, staff={"id": 2})
     assert item["id"] == 900 and conn.commits == 1
-    assert [(c["kol_pool_id"], c["action"], c["commits_at_call"]) for c in rec.calls] == [(61, "outreach", 1)]
-    assert rec.calls[0]["payload"] == {"message_id": 900, "direction": "outbound", "project_id": 5, "kol_id": 77, "source": "evidence_message"}
-    assert bool(_warnings(caplog, "pool_action_bridge.failed")) is fail
-
-    rec2 = bridge_env(conn)
-    messages.create_message({"project_id": 5, "body": "re", "direction": "inbound"}, staff={"id": 2})
-    assert rec2.calls == []
+    assert item["body"] == "manual contract discussion" and item["direction"] == direction
+    assert item["source"] == source
+    assert rec.calls == [] and conn.rollbacks == 0
+    assert not _warnings(caplog, "pool_action_bridge.failed")
 
 
 # ── 5) 项目级外联消息:workflow_evidence_project_writes.add_project_message ─
-@pytest.mark.parametrize("fail", [False, True])
-def test_add_project_message_bridges_outbound_outreach(monkeypatch, bridge_env, caplog, fail):
+@pytest.mark.parametrize("direction", ["outbound", "inbound", "internal_note"])
+@pytest.mark.parametrize("source", ["manual", "dm", "provider_verified"])
+def test_add_project_message_preserves_record_without_transport_feedback(monkeypatch, bridge_env, caplog, direction, source):
     from app.domains.projects import workflow_evidence_project_writes as pw
 
     conn = _message_conn()
@@ -312,15 +314,17 @@ def test_add_project_message_bridges_outbound_outreach(monkeypatch, bridge_env, 
     monkeypatch.setattr(pw.scope, "assert_project_access", lambda *a, **k: None)
     monkeypatch.setattr(pw, "get_conn", lambda: conn)
     monkeypatch.setattr(pw.audit, "log_business_event", lambda **_k: None)
-    rec = bridge_env(conn, fail=fail)
+    rec = bridge_env(conn, fail=True)
     with caplog.at_level(logging.WARNING):
         item = pw.add_project_message(
             5,
-            {"body": "hello"},
+            {"body": "manual contract discussion", "direction": direction, "source": source,
+             "metadata": {"verified": True, "provider_message_id": "client-value"}},
             staff={"id": 2},
             feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
         )
     assert item["id"] == 900 and conn.commits == 1
-    assert [(c["kol_pool_id"], c["action"], c["commits_at_call"]) for c in rec.calls] == [(61, "outreach", 1)]
-    assert rec.calls[0]["payload"]["source"] == "project_message"
-    assert bool(_warnings(caplog, "pool_action_bridge.failed")) is fail
+    assert item["body"] == "manual contract discussion" and item["direction"] == direction
+    assert item["source"] == source
+    assert rec.calls == [] and conn.rollbacks == 0
+    assert not _warnings(caplog, "pool_action_bridge.failed")

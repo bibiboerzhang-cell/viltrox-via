@@ -6,6 +6,7 @@ coordinates and matched terms, never source profile or transcript bodies.
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 import math
 import re
 from typing import Any
@@ -20,6 +21,10 @@ from app.domains.kol.profile_recall_match_evidence import (
     CONTROLLED_ALIAS_EVIDENCE_SOURCE,
     candidate_facets,
 )
+from app.domains.kol.search_plan_semantics import project_query_cell_intent, validate_query_cell_execution
+from app.domains.kol.targeted_query_execution import _segment_provenance
+from app.domains.kol.profile_candidate_observations import content_observations
+from app.domains.kol.profile_content_match_provenance import attach_content_match_coordinates, project_match_coordinates
 from app.domains.kol.search_sessions_serde import (
     project_public_asset_url,
     project_public_profile_text,
@@ -182,47 +187,37 @@ def _representative_content_evidence(
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """Build bounded in-memory content fields and a non-text availability status."""
 
-    sources: list[dict[str, Any]] = [raw]
-    latest_raw = raw.get("latest_real_video")
-    if isinstance(latest_raw, dict):
-        sources.append(latest_raw)
-    for key in ("representative_evidence", "video_evidence", "recent_videos"):
-        values = raw.get(key)
-        if isinstance(values, list):
-            sources.extend(item for item in values[:8] if isinstance(item, dict))
-
-    record: dict[str, str] = {}
-    title = _bounded_content_text(
-        latest.get("title") or raw.get("sample_title") or raw.get("title"),
-        limit=_CONTENT_EVIDENCE_LIMITS["title"],
-    )
-    if title:
-        record["title"] = title
-    for field, aliases in _CONTENT_FIELD_ALIASES.items():
-        chunks: list[str] = []
-        for source in sources:
-            for alias in aliases:
-                value = _bounded_content_text(
-                    source.get(alias),
-                    limit=_CONTENT_EVIDENCE_LIMITS[field],
-                )
-                if value and value not in chunks:
-                    chunks.append(value)
-        if chunks:
-            record[field] = " ".join(chunks)[:_CONTENT_EVIDENCE_LIMITS[field]]
-
-    locator_values = [
-        source.get(key)
-        for source in sources
-        for key in ("content_url", "source_url", "video_url", "post_url")
-    ]
-    has_content_locator = any(_looks_like_video_url(value) for value in locator_values if value)
-    detail_fields = sorted(set(record).intersection(_CONTENT_FIELD_ALIASES))
-    return ([record] if record else []), {
+    sources = content_observations(raw)
+    if not sources and latest.get("title"):
+        sources = [latest]
+    records: list[dict[str, str]] = [{} for _source in sources]
+    truncated_fields: set[str] = set()
+    # Preserve each work independently. The aggregate per-field memory budget
+    # is unchanged; a long first transcript must not consume every later work.
+    for field, maximum in _CONTENT_EVIDENCE_LIMITS.items():
+        owners = [(index, source) for index, source in enumerate(sources) if source.get(field)]
+        per_record = max(1, maximum // max(1, len(owners)))
+        for index, source in owners:
+            value = _bounded_content_text(source[field], limit=per_record + 1)
+            if len(value) > per_record:
+                truncated_fields.add(field)
+            if value:
+                records[index][field] = value[:per_record]
+    from app.domains.kol.profile_content_match_provenance import content_coordinates
+    for record, source in zip(records, sources):
+        record.update(content_coordinates(source))
+    has_content_locator = any(record.get("content_url") for record in records)
+    records = [record for record in records if any(field in record for field in _CONTENT_EVIDENCE_LIMITS)]
+    available = {field for record in records for field in _CONTENT_EVIDENCE_LIMITS if record.get(field)}
+    detail_fields = sorted(available.intersection(_CONTENT_FIELD_ALIASES))
+    return records, {
         "has_content_locator": has_content_locator,
-        "available_fields": sorted(record),
+        "available_fields": sorted(available),
         "detail_fields": detail_fields,
         "detail_text_available": bool(detail_fields),
+        "content_record_count": len(records),
+        "content_text_truncated": bool(truncated_fields),
+        "truncated_fields": sorted(truncated_fields),
         "text_exposed": False,
     }
 
@@ -236,12 +231,19 @@ def _safe_query_cell(raw: Any, *, fallback_query: str = "") -> dict[str, Any] | 
         return None
     required_groups = raw.get("required_evidence_groups")
     locked_term_groups = targeted_search_contract.rebuild_locked_term_groups_for_cell(raw)
+    query_intent = project_query_cell_intent(raw)
+    executed_query = _text(raw.get("executed_query"))[:500]
+    validation = validate_query_cell_execution(raw, executed_query)
     return {
         "query_cell_id": cell_id or "legacy_single_query",
         "objective": _text(raw.get("objective"))[:80],
         "segment": _text(raw.get("segment") or raw.get("query_cell_segment"))[:120],
         "segment_label": _text(raw.get("segment_label"))[:240],
+        **_segment_provenance(raw),
         "primary_query": primary_query,
+        **({"executed_query": executed_query} if executed_query else {}),
+        **({"query_intent": query_intent, "query_intent_validation": validation,
+            "coverage_status": validation["status"]} if query_intent is not None else {}),
         "required_evidence_groups": [
             _text(value)[:80]
             for value in (required_groups if isinstance(required_groups, list) else [])[:8]
@@ -319,6 +321,7 @@ def _merge_match_evidence(*values: Any) -> list[dict[str, str]]:
             if field and term and key not in seen:
                 seen.add(key)
                 item = {"field": field, "term": term, "source": source}
+                item.update(project_match_coordinates(raw))
                 if source == CONTROLLED_ALIAS_EVIDENCE_SOURCE:
                     item.update({
                         "canonical_term": canonical_term,
@@ -362,6 +365,7 @@ def _project_online_match_evidence(value: Any) -> list[dict[str, str]]:
         ):
             continue
         evidence = {"field": field, "term": term}
+        evidence.update(project_match_coordinates(raw))
         if source:
             evidence["source"] = source
         if source in {CONTROLLED_ALIAS_EVIDENCE_SOURCE, CAPABILITY_USE_EVIDENCE_SOURCE}:
@@ -384,6 +388,12 @@ def _project_online_match_evidence(value: Any) -> list[dict[str, str]]:
             })
         projected.append(evidence)
     return _merge_match_evidence(projected)[:12]
+
+
+def _verified_audience_platform_data(raw: dict[str, Any]) -> dict[str, Any]:
+    from app.domains.kol.audience_evidence import project_online_audience
+
+    return project_online_audience(raw)
 
 
 def _candidate_row(raw: dict[str, Any]) -> dict[str, Any]:
@@ -433,8 +443,8 @@ def _candidate_row(raw: dict[str, Any]) -> dict[str, Any]:
         "secondary_topics_json": raw.get("secondary_topics_json") or [],
         "profile_text": _text(raw.get("profile_text"))[:1000],
         "type_reason": _text(raw.get("type_reason"))[:300],
-        # Never feed arbitrary provider blobs into market qualification.
-        "raw_platform_data": "{}",
+        # Never feed arbitrary provider blobs or claimed manual proof into gates.
+        "raw_platform_data": json.dumps(_verified_audience_platform_data(raw)),
         "identity_projection_passed": identity.get("passed") is True,
     }
 
@@ -472,12 +482,12 @@ def adapt_candidates(
             cell_query = _text(cell.get("primary_query")) or query_text
             cell_inputs.append({
                 "query_cell": cell,
-                "match_evidence": cell_match_evidence(
+                "match_evidence": attach_content_match_coordinates(cell_match_evidence(
                     row,
                     evidence,
                     query_text=cell_query,
                     query_cell=cell,
-                ),
+                ), representative),
             })
         match_evidence = _merge_match_evidence(
             *(entry["match_evidence"] for entry in cell_inputs)

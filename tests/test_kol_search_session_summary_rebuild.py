@@ -183,6 +183,7 @@ class KolSearchSessionSummaryRebuildTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(len(cursor.calls), 3)
         self.assertTrue(cursor.calls[0][0].startswith("SELECT result_summary_json"))
+        self.assertTrue(cursor.calls[0][0].endswith("FOR NO KEY UPDATE"))
         self.assertEqual(cursor.calls[0][1], (47,))
         self.assertIn("ORDER BY rank NULLS LAST, id", cursor.calls[1][0])
         self.assertEqual(cursor.calls[1][1], (47,))

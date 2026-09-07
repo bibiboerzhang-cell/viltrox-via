@@ -337,6 +337,10 @@ def test_update_session_always_persists_a_fresh_origin_breakdown() -> None:
     class _Conn:
         def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Rows:
             flat = " ".join(sql.split())
+            if flat.startswith("SELECT status, result_summary_json FROM vkpi_kol_search_sessions"):
+                assert flat.endswith("FOR NO KEY UPDATE")
+                assert params == (1129,)
+                return _Rows([{"status": "running", "result_summary_json": {}}])
             if flat.startswith("SELECT origin AS origin"):
                 return _Rows(
                     [

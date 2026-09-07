@@ -8,6 +8,10 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import business_truth
+from app.domains.recommendations.communication_evidence import (
+    COMMUNICATION_NODES, blocked_communication_record, communication_evidence, project_outcome_communications,
+)
+from app.domains.recommendations.outcome_refresh_project_links import load_refresh_projects
 from app.shared.vkpi_utils import utcnow_iso
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
@@ -72,6 +76,8 @@ def ensure_outcome(recommendation_id: int, *, kol_pool_id: int | None = None, la
 
 
 def record(recommendation_id: int, node: str, *, context: dict[str, Any] | None = None, note: str = "") -> dict[str, Any]:
+    if node in COMMUNICATION_NODES:
+        return blocked_communication_record()
     ensure_vkpi_product_industry_schema()
     if node not in NODE_COLUMNS:
         raise ValueError(f"unsupported outcome node: {node}")
@@ -99,6 +105,8 @@ def record_if_missing(recommendation_id: int, node: str, *, at: str | None = Non
     与 record() 的区别:时间取真实业务事件时间(派单 updated_at / 触达 touched_at / 反馈 created_at)
     而非「现在」,且已置位时不产生任何 UPDATE(批量同步反复跑零噪声)。零触 viltrox_fit_score。
     """
+    if node in COMMUNICATION_NODES:
+        return False
     ensure_vkpi_product_industry_schema()
     if node not in NODE_COLUMNS:
         raise ValueError(f"unsupported outcome node: {node}")
@@ -131,7 +139,7 @@ def record_if_missing(recommendation_id: int, node: str, *, at: str | None = Non
 def get_outcome(recommendation_id: int) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     row = get_conn().execute("SELECT * FROM vkpi_recommendation_outcomes WHERE recommendation_id=?", (int(recommendation_id),)).fetchone()
-    return {"outcome": dict(row) if row else None}
+    return {"outcome": project_outcome_communications(row)}
 
 
 def _ids_clause(column: str, values: list[int]) -> tuple[str, list[int]]:
@@ -227,31 +235,7 @@ def _load_refresh_context(conn: Any, recommendation_id: int, persist_linked_kol:
 
 
 def _load_refresh_projects(conn: Any, context: dict[str, Any]) -> dict[str, Any]:
-    rec_id = context["rec_id"]
-    projects = conn.execute(
-        """
-        SELECT id, stage, created_at, updated_at
-        FROM vkpi_projects
-        WHERE COALESCE(stage_status, '') != 'deleted'
-          AND created_at >= ?
-          AND (
-            metadata_json LIKE ?
-            OR metadata_json LIKE ?
-            OR (
-              ? > 0 AND kol_id=? AND source_type='product_recommendation'
-              AND (? = '' OR product_sku = ?)
-            )
-          )
-        """,
-        (context["recommended_at"], f'%"recommendation_id": {rec_id}%',
-         f'%"recommendation_id":{rec_id}%', context["kol_id"], context["kol_id"],
-         context["launch_sku"], context["launch_sku"]),
-    ).fetchall()
-    project_ids = [int(row["id"]) for row in projects]
-    project_clause, project_params = _ids_clause("project_id", project_ids)
-    return {"rows": projects, "ids": project_ids, "clause": project_clause, "params": project_params,
-            "stage_map": {int(row["id"]): str(row["stage"] or "") for row in projects},
-            "first_project": _first_timestamp([row["created_at"] for row in projects])}
+    return load_refresh_projects(conn, context, ids_clause=_ids_clause, first_timestamp=_first_timestamp)
 
 
 def _load_project_evidence(conn: Any, context: dict[str, Any], projects: dict[str, Any]) -> dict[str, Any]:
@@ -260,20 +244,7 @@ def _load_project_evidence(conn: Any, context: dict[str, Any], projects: dict[st
         return {"message": None, "agreement": None, "content": None,
                 "click": None, "sales": None, "cost": None}
     recommended_at = context["recommended_at"]
-    clause, message_params = _ids_clause("project_id", project_ids)
-    message_where = [clause]
-    message_params.append(recommended_at)
-    message_stats = conn.execute(
-        f"""
-        SELECT
-            MIN(captured_at) AS first_message_at,
-            MIN(CASE WHEN direction='outbound' THEN captured_at END) AS first_outbound_at,
-            MIN(CASE WHEN direction='inbound' THEN captured_at END) AS first_inbound_at
-        FROM vkpi_messages
-        WHERE ({' OR '.join(f'({part})' for part in message_where)})
-          AND captured_at >= ?
-        """, tuple(message_params),
-    ).fetchone()
+    message_stats = None  # Mutable/manual messages cannot establish transport actuals.
     agreement_clause, agreement_params = _ids_clause("project_id", project_ids)
     agreement_stage_at = conn.execute(
         f"""
@@ -357,8 +328,8 @@ def _string_or_none(value: Any) -> str | None:
 
 
 def _summarize_refresh(context: dict[str, Any], projects: dict[str, Any], evidence: dict[str, Any], claim: Any) -> dict[str, Any]:
-    first_outreach = _string_or_none(_row_get(evidence["message"], "first_outbound_at") or _row_get(evidence["message"], "first_message_at"))
-    first_reply = _string_or_none(_row_get(evidence["message"], "first_inbound_at"))
+    first_outreach = None
+    first_reply = None
     first_agreement = _string_or_none(_row_get(evidence["agreement"], "first_agreement_at"))
     closed_stages = {"agreed", "shipped", "received", "published", "measured", "closed"}
     if not first_agreement and any(stage in closed_stages for stage in projects["stage_map"].values()):
@@ -383,7 +354,8 @@ def _summarize_refresh(context: dict[str, Any], projects: dict[str, Any], eviden
         "project_ids": projects["ids"], "kol_id": context["kol_id"],
         "linked_kol_source": context["linked_kol_source"],
         "project_created": bool(values["first_project"]), "was_claimed": bool(first_claim),
-        "outreach_sent": bool(first_outreach), "reply_received": bool(first_reply),
+        "outreach_sent": None, "reply_received": None,
+        "communication_evidence": communication_evidence(),
         "agreement_reached": bool(first_agreement), "content_published": bool(first_content),
         "order_attributed": has_net_order, "valid_clicks": values["clicks"],
         "orders": orders, "gmv_cents": gmv_cents, "cost_cents": cost_cents,
@@ -415,9 +387,6 @@ def _refresh_update_plan(values: dict[str, Any]) -> tuple[list[str], list[Any]]:
     nodes = (
         ("first_project", ("project_created=?", "project_created_at=COALESCE(project_created_at, ?)")),
         ("first_claim", ("was_claimed=?", "claimed_at=COALESCE(claimed_at, ?)")),
-        ("first_outreach", ("outreach_sent=?", "outreach_sent_at=COALESCE(outreach_sent_at, ?)")),
-        ("first_reply", ("reply_received=?", "reply_at=COALESCE(reply_at, ?)",
-                         "reply_sentiment=COALESCE(NULLIF(reply_sentiment, ''), 'unknown')")),
         ("first_agreement", ("agreement_reached=?", "agreement_at=COALESCE(agreement_at, ?)")),
     )
     for key, columns in nodes:
@@ -471,7 +440,7 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
     values = _summarize_refresh(context, projects, evidence, claim)
     if not projects["ids"] and not values["first_claim"]:
         existing = context["existing"]
-        return {"outcome": dict(existing) if existing else None, "aggregates": values["aggregates"]}
+        return {"outcome": project_outcome_communications(existing), "aggregates": values["aggregates"]}
     _ensure_refresh_outcome(context)
     return _write_refresh_outcome(conn, context["rec_id"], values)
 
@@ -548,8 +517,8 @@ def refresh_open_outcomes(limit: int = 200, *, persist_linked_kol: bool | None =
             "action_sync": sync_result, "rerank_fit": fit_result,
             "note": "批量回填业务标签(持续学习结果段):先同步动作/阶段/触达为 outcome 节点,缺键再从 pool 桥解析"
                     " linked_main_kol_id(默认只读影子,VKPI_RECO_PERSIST_LINKED_KOL=1 才回写)打通 attribution→outcome,"
-                    "再从真实业务行(claim/消息/内容/销售净额)促升;退款计入 GMV 净额;尾随周拟合影子重排序;"
-                    "只读真实业务行促升,零伪造、零触 viltrox_fit_score。"}
+                    "再从业务记录(claim/内容/销售净额)更新运营标签;消息通信保持待核;退款计入 GMV 净额;"
+                    "尾随周拟合运营偏好重排序,不以发送/回复/沉默训练;零触 viltrox_fit_score。"}
 
 
 def ensure_outcomes_for_display(

@@ -294,9 +294,9 @@ def test_assignment_stage_sync_maps_device_sent_and_skips_missing_recommendation
     compat.commit()
     result = outcome_sync.sync_action_outcomes()
     assert result["assignments"]["no_recommendation"] == 1
-    assert result["assignments"]["changed"] == 2 and result["touches"]["changed"] == 0
+    assert result["assignments"]["changed"] == 1 and result["touches"]["changed"] == 0
     out = _outcome(compat, rec_id)
-    assert truthy(out["outreach_sent"]) and truthy(out["agreement_reached"]) and not truthy(out["content_published"])
+    assert not truthy(out["outreach_sent"]) and truthy(out["agreement_reached"]) and not truthy(out["content_published"])
     assert str(out["agreement_at"]).startswith("2026-07-05")  # 事件自身时间,非「现在」
     assert outcome_sync.sync_action_outcomes()["changed"] == 0
 

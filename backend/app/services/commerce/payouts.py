@@ -4,23 +4,51 @@ services/commerce/payouts.py — Payout cycle + lifecycle management
 Cycle lifecycle:
     upcoming -> active (when its start_date is reached)
     active   -> processing (admin clicks 'Process now' or cycle.process_date hits)
-    processing -> processed (when all payouts are paid or failed)
+    processing -> processed (only when every payout is terminal)
+    processing -> active/upcoming (blocked before dispatch; safe to retry)
 
 Payout lifecycle:
     pending -> approved -> paid
     pending -> held (missing info / suspected fraud)
-    approved -> failed (PayPal/bank send error)
+    approved -> paying -> paid/failed (confirmed terminal provider receipt)
+    paying -> payment_unknown (unconfirmed outcome; never automatically retry)
 """
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
+from app.domains.costs.common import normalize_currency
 
 logger = get_logger(__name__)
+_LEGACY_PLACEHOLDER_SQL = (
+    "(substr(lower(trim(coalesce(paid_tx_id,''))),1,8)='pp_stub_' "
+    "OR substr(lower(trim(coalesce(paid_tx_id,''))),1,10)='bank_stub_')"
+)
+
+
+class PayoutNotDispatched(RuntimeError):
+    """Only a server adapter that has not issued external I/O may raise this."""
+
+
+@dataclass(frozen=True)
+class PayoutDispatchReceipt:
+    """Server-adapter evidence of one final transfer, never a client payload.
+
+    Accepted/queued batches are not terminal receipts. No live adapter is
+    configured here; adding one requires provider-side idempotency/reconciliation.
+    """
+
+    payout_id: int
+    method: str
+    amount_cents: int
+    currency: str
+    status: str
+    transaction_id: str
 
 
 def _month_bounds(anchor: datetime) -> tuple[datetime, datetime]:
@@ -129,32 +157,62 @@ def get_cycle_detail(cycle_id: str) -> dict | None:
 
     return {
         "cycle": {**dict(row), **_cycle_counts(cycle_id)},
-        "payouts": [dict(p) for p in payouts],
+        "payouts": [_project_payout(p) for p in payouts],
     }
 
 
 def _cycle_counts(cycle_id: str) -> dict:
     conn = get_conn()
     r = conn.execute(
-        """
+        f"""
         SELECT
           COUNT(*) AS total,
           SUM(CASE WHEN status='approved' THEN amount_cents ELSE 0 END) AS approved_cents,
           SUM(CASE WHEN status='pending'  THEN amount_cents ELSE 0 END) AS pending_cents,
           SUM(CASE WHEN status='held'     THEN amount_cents ELSE 0 END) AS held_cents,
-          SUM(CASE WHEN status='paid'     THEN amount_cents ELSE 0 END) AS paid_cents,
+          SUM(CASE WHEN status='paid' AND NOT {_LEGACY_PLACEHOLDER_SQL} THEN amount_cents ELSE 0 END) AS paid_cents,
+          SUM(CASE WHEN status='paid' AND {_LEGACY_PLACEHOLDER_SQL} THEN amount_cents ELSE 0 END) AS unverified_cents,
+          SUM(CASE WHEN status='paid' AND {_LEGACY_PLACEHOLDER_SQL} THEN 1 ELSE 0 END) AS blocked_legacy_receipt_count,
           COUNT(DISTINCT user_id) AS unique_creators
         FROM payouts WHERE cycle_id = ?
         """,
         (cycle_id,),
     ).fetchone()
-    return {
+    currency_summary = _cycle_currency_summary(conn, cycle_id)
+    result = {
         "approved_cents": r["approved_cents"] or 0,
         "pending_cents":  r["pending_cents"]  or 0,
         "held_cents":     r["held_cents"]     or 0,
         "paid_cents":     r["paid_cents"]     or 0,
+        "unverified_cents": r["unverified_cents"] or 0,
+        "blocked_legacy_receipt_count": r["blocked_legacy_receipt_count"] or 0,
         "creator_count":  r["unique_creators"] or 0,
+        **currency_summary,
     }
+    if currency_summary["aggregation_status"] in {"mixed_currency", "unknown_currency"}:
+        for key in ("approved_cents", "pending_cents", "held_cents", "paid_cents", "unverified_cents"):
+            result[key] = None  # Never add amounts belonging to different units.
+    return result
+
+
+def _payout_currency(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("payout currency is missing or unsupported")
+    currency = normalize_currency(value)
+    if not currency:
+        raise ValueError("payout currency is missing or unsupported")
+    return "CNY" if currency == "RMB" else currency
+
+
+def _cycle_currency_summary(conn: Any, cycle_id: str) -> dict:
+    rows = conn.execute("SELECT DISTINCT currency FROM payouts WHERE cycle_id=?", (cycle_id,)).fetchall()
+    try:
+        currencies = {_payout_currency(row["currency"]) for row in rows}
+    except ValueError:
+        return {"currency": None, "aggregation_status": "unknown_currency"}
+    status = "empty" if not currencies else "single_currency" if len(currencies) == 1 else "mixed_currency"
+    return {"currency": next(iter(currencies)) if len(currencies) == 1 else None,
+            "aggregation_status": status}
 
 
 # =========================================================================
@@ -164,45 +222,61 @@ def _cycle_counts(cycle_id: str) -> dict:
 def accrue_cycle(cycle_id: str) -> dict:
     """Compute pending payouts from orders in cycle's window."""
     conn = get_conn()
-    cycle = conn.execute(
-        "SELECT * FROM payout_cycles WHERE id = ?", (cycle_id,)
-    ).fetchone()
-    if not cycle:
-        raise ValueError(f"cycle {cycle_id} not found")
+    try:
+        # Serialize accrual with process_cycle's cycle CAS. A completed or
+        # in-flight cycle cannot gain new payable rows after its final count.
+        lock = " FOR UPDATE" if is_postgres_runtime() else ""
+        cycle = conn.execute(
+            "SELECT * FROM payout_cycles WHERE id = ?" + lock, (cycle_id,),
+        ).fetchone()
+        if not cycle or cycle["status"] not in {"active", "upcoming"}:
+            raise ValueError("payout cycle is not open for accrual")
+        return _accrue_open_cycle(conn, cycle_id, cycle)
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _accrue_open_cycle(conn: Any, cycle_id: str, cycle: Any) -> dict:
 
     # Aggregate commission by user for orders in window
+    # CompatRow serializes PostgreSQL JSON arrays for the existing TEXT ledger.
+    order_ids_aggregate = "json_agg(id)" if is_postgres_runtime() else "json_group_array(id)"
     aggregates = conn.execute(
-        """
-        SELECT attribution_user_id AS user_id,
+        f"""
+        SELECT attribution_user_id AS user_id, upper(trim(currency)) AS currency,
                COUNT(*) AS orders,
                SUM(subtotal_cents) AS gmv,
                SUM(commission_cents) AS commission,
-               json_group_array(id) AS order_ids
+               {order_ids_aggregate} AS order_ids
         FROM orders
         WHERE placed_at BETWEEN ? AND ?
           AND status = 'paid'
           AND attribution_user_id IS NOT NULL
           AND commission_cents > 0
-        GROUP BY attribution_user_id
+        GROUP BY attribution_user_id, upper(trim(currency))
         """,
         (cycle["start_date"], cycle["end_date"]),
     ).fetchall()
 
+    aggregates = _validated_accruals(aggregates)
     created_count = 0
     for agg in aggregates:
         # upsert by (cycle_id, user_id)
         existing = conn.execute(
-            "SELECT id FROM payouts WHERE cycle_id = ? AND user_id = ?",
+            "SELECT id, currency, status FROM payouts WHERE cycle_id = ? AND user_id = ?",
             (cycle_id, agg["user_id"]),
         ).fetchone()
         if existing:
+            if existing["status"] != "pending" and _payout_currency(existing["currency"]) != agg["currency"]:
+                raise ValueError("approved payout currency cannot change during accrual")
             conn.execute(
                 """UPDATE payouts SET
-                    amount_cents = ?, gmv_cents = ?, order_count = ?, order_ids_json = ?
+                    amount_cents = ?, gmv_cents = ?, order_count = ?, order_ids_json = ?, currency = ?
                    WHERE id = ? AND status = 'pending'""",
                 (
                     agg["commission"], agg["gmv"], agg["orders"], agg["order_ids"],
-                    existing["id"],
+                    agg["currency"], existing["id"],
                 ),
             )
         else:
@@ -226,17 +300,29 @@ def accrue_cycle(cycle_id: str) -> dict:
             conn.execute(
                 """INSERT INTO payouts (
                     cycle_id, user_id, amount_cents, gmv_cents, order_count,
-                    order_ids_json, method, method_details, status, hold_reason
-                ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    order_ids_json, method, method_details, status, hold_reason, currency
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     cycle_id, agg["user_id"], agg["commission"], agg["gmv"], agg["orders"],
-                    agg["order_ids"], method, details, status, hold_reason,
+                    agg["order_ids"], method, details, status, hold_reason, agg["currency"],
                 ),
             )
             created_count += 1
 
     conn.commit()
     return {"accrued_count": created_count, "cycle_id": cycle_id}
+
+
+def _validated_accruals(rows: Any) -> list[dict]:
+    validated, seen_users = [], set()
+    for row in rows:
+        item = dict(row)
+        item["currency"] = _payout_currency(item["currency"])
+        if item["user_id"] in seen_users:
+            raise ValueError("mixed currencies cannot accrue into one creator payout")
+        seen_users.add(item["user_id"])
+        validated.append(item)
+    return validated
 
 
 # =========================================================================
@@ -258,46 +344,62 @@ def approve_all(cycle_id: str, admin_id: int) -> dict:
 
 def approve_one(payout_id: int, admin_id: int) -> dict:
     conn = get_conn()
-    conn.execute(
+    changed = conn.execute(
         """UPDATE payouts SET status='approved',
             approved_at = datetime('now'), approved_by = ?
            WHERE id = ? AND status IN ('pending','held')""",
         (admin_id, payout_id),
     )
-    conn.commit()
+    _require_changed_payout(conn, changed)
     return {"ok": True, "payout_id": payout_id}
 
 
 def hold_one(payout_id: int, reason: str, admin_id: int) -> dict:
     conn = get_conn()
-    conn.execute(
-        "UPDATE payouts SET status='held', hold_reason=? WHERE id = ?",
+    changed = conn.execute(
+        "UPDATE payouts SET status='held', hold_reason=? "
+        "WHERE id = ? AND status IN ('pending','approved','held')",
         (reason, payout_id),
     )
-    conn.commit()
+    _require_changed_payout(conn, changed)
     return {"ok": True, "payout_id": payout_id}
 
 
 def release_one(payout_id: int, admin_id: int) -> dict:
     conn = get_conn()
-    conn.execute(
-        "UPDATE payouts SET status='pending', hold_reason=NULL WHERE id = ?",
+    changed = conn.execute(
+        "UPDATE payouts SET status='pending', hold_reason=NULL "
+        "WHERE id = ? AND status='held'",
         (payout_id,),
     )
-    conn.commit()
+    _require_changed_payout(conn, changed)
     return {"ok": True, "payout_id": payout_id}
 
 
 def adjust_one(
     payout_id: int, new_amount_cents: int, reason: str, admin_id: int
 ) -> dict:
+    if type(new_amount_cents) is not int or new_amount_cents < 0:
+        raise ValueError("payout amount must be non-negative integer cents")
     conn = get_conn()
-    conn.execute(
-        "UPDATE payouts SET amount_cents=?, hold_reason=? WHERE id = ?",
+    changed = conn.execute(
+        "UPDATE payouts SET amount_cents=?, hold_reason=? "
+        "WHERE id = ? AND status IN ('pending','held')",
         (new_amount_cents, f"ADJUSTED: {reason}", payout_id),
     )
-    conn.commit()
+    _require_changed_payout(conn, changed)
     return {"ok": True, "payout_id": payout_id, "new_amount_cents": new_amount_cents}
+
+
+def _require_changed_payout(conn: Any, changed: Any) -> None:
+    if changed.rowcount != 1:
+        conn.rollback()
+        raise ValueError("payout state does not allow this action")
+    try:
+        conn.commit()
+    except BaseException:
+        conn.rollback()  # Keep the earlier durable paying claim if settlement was not saved.
+        raise
 
 
 def user_history(user_id: int) -> list[dict]:
@@ -309,15 +411,24 @@ def user_history(user_id: int) -> list[dict]:
            ORDER BY p.paid_at DESC""",
         (user_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [_project_payout(r) for r in rows]
+
+
+def _project_payout(row: Any) -> dict:
+    result = dict(row)
+    transaction = str(result.get("paid_tx_id") or "").strip().lower()
+    if result.get("status") == "paid" and transaction.startswith(("pp_stub_", "bank_stub_")):
+        result.update(status="payment_unknown", stored_status="paid", payment_confirmed=None,
+                      payment_verification="legacy_placeholder_receipt")
+    return result
 
 
 # =========================================================================
-# Process cycle (calls PayPal/bank — stubs here, hook your real senders)
+# Process cycle (no live payment adapter is configured)
 # =========================================================================
 
 def process_cycle(cycle_id: str, admin_id: int) -> dict:
-    """Transition all approved payouts → paid by dispatching to payment providers."""
+    """Claim once; only confirmed final server receipts can transition to paid."""
     conn = get_conn()
     cycle = conn.execute(
         "SELECT * FROM payout_cycles WHERE id = ?", (cycle_id,)
@@ -344,71 +455,117 @@ def process_cycle(cycle_id: str, admin_id: int) -> dict:
         (cycle_id,),
     ).fetchall()
 
-    processed_count = 0
-    failed: list[dict] = []
-    for p in approved:
-        try:
-            # 2026-07-18 竞态修:每笔打款前先 CAS 抢单——只有把该 payout 从
-            # approved 抢到 paying 的那一次(rowcount==1)才真发款,杜绝双打款。
-            claim = conn.cursor()
-            claim.execute(
-                "UPDATE payouts SET status='paying' WHERE id = ? AND status = 'approved'",
-                (p["id"],),
-            )
-            conn.commit()
-            if int(getattr(claim, "rowcount", 0) or 0) != 1:
-                continue
-            tx_id = _dispatch_payout(dict(p))
-            conn.execute(
-                "UPDATE payouts SET status='paid', paid_at=datetime('now'), paid_tx_id=? "
-                "WHERE id = ?",
-                (tx_id, p["id"]),
-            )
-            processed_count += 1
-        except Exception as e:
-            logger.exception("payout %s failed", p["id"])
-            conn.execute(
-                "UPDATE payouts SET status='failed', failed_at=datetime('now'), failed_reason=? "
-                "WHERE id = ?",
-                (str(e), p["id"]),
-            )
-            failed.append({"payout_id": p["id"], "error": str(e)})
-    conn.commit()
-
-    # Mark processed when all approved are resolved
-    still_pending = conn.execute(
-        "SELECT COUNT(*) AS n FROM payouts WHERE cycle_id = ? AND status IN ('approved',)",
-        (cycle_id,),
-    ).fetchone()
-    if still_pending["n"] == 0:
-        conn.execute(
-            "UPDATE payout_cycles SET status='processed', processed_at=datetime('now') "
-            "WHERE id = ?",
-            (cycle_id,),
-        )
-        conn.commit()
-
+    outcomes = [_process_payout(conn, dict(p)) for p in approved]
+    completion = _finish_cycle(conn, cycle_id, cycle["status"])
+    has_called = any(item["status"] in {"paid", "failed"} for item in outcomes)
+    unknown = completion["unknown_count"] > 0
+    not_called = [item for item in outcomes if item["status"] == "not_called"]
     return {
-        "processed_count": processed_count,
-        "failed": failed,
+        "status": "unknown" if unknown else "processed" if completion["cycle_complete"]
+        else "blocked" if not_called else "partial",
+        "processed_count": sum(item["status"] == "paid" for item in outcomes),
+        "failed": [item for item in outcomes if item["status"] == "failed"],
+        "not_called": not_called,
+        "unknown": [item for item in outcomes if item["status"] == "payment_unknown"],
+        "provider_calls_performed": True if has_called else None if unknown else False,
         "cycle_id": cycle_id,
+        **completion,
     }
 
 
-def _dispatch_payout(payout: dict) -> str:
-    """
-    Actually send the money. Replace with real PayPal Payouts API / bank transfer.
-    Returns: provider transaction id
-    """
-    method = payout.get("method")
-    if method == "paypal":
-        # TODO: real PayPal Payouts SDK call
-        # return paypal_client.create_payout(email, amount)
-        return f"pp_stub_{payout['id']}_{datetime.utcnow().timestamp():.0f}"
-    if method == "bank":
-        # TODO: Stripe transfer or bank API
-        return f"bank_stub_{payout['id']}"
-    raise ValueError(f"Unsupported payout method: {method}")
+def _confirmed_receipt(receipt: Any, payout: dict) -> bool:
+    if not isinstance(receipt, PayoutDispatchReceipt):
+        return False
+    if type(receipt.payout_id) is not int or type(receipt.amount_cents) is not int:
+        return False
+    try:
+        expected_currency = _payout_currency(payout.get("currency"))
+        observed_currency = _payout_currency(receipt.currency)
+    except ValueError:
+        return False
+    expected = (payout["id"], payout["method"], payout["amount_cents"], expected_currency)
+    observed = (receipt.payout_id, receipt.method, receipt.amount_cents, observed_currency)
+    tx = receipt.transaction_id
+    return (
+        observed == expected and receipt.amount_cents > 0
+        and receipt.method in {"paypal", "bank"} and receipt.status in {"paid", "failed"}
+        and isinstance(tx, str) and 0 < len(tx) <= 200 and tx == tx.strip()
+        and not any(char.isspace() for char in tx)
+        and not tx.lower().startswith(("pp_stub_", "bank_stub_", "stub_"))
+    )
+
+
+def _dispatch_result(payout: dict) -> tuple[str, str | None, str]:
+    try:
+        payout = {**payout, "currency": _payout_currency(payout.get("currency"))}
+    except ValueError:
+        return "not_called", None, "payout_currency_invalid"
+    if type(payout.get("amount_cents")) is not int or payout["amount_cents"] <= 0:
+        return "not_called", None, "payout_amount_invalid"
+    try:
+        receipt = _dispatch_payout(dict(payout))  # Adapter mutation cannot rewrite the approved contract.
+        if _confirmed_receipt(receipt, payout):
+            return receipt.status, receipt.transaction_id, "provider_confirmed_final"
+        return "payment_unknown", None, "invalid_provider_receipt"
+    except PayoutNotDispatched:
+        return "not_called", None, "payment_provider_not_configured"
+    except Exception as exc:
+        # No raw provider message/contact/payment data in logs or API receipts.
+        logger.warning("payout dispatch outcome unknown | id=%s error_type=%s", payout["id"], type(exc).__name__)
+        return "payment_unknown", None, "provider_outcome_unknown"
+
+
+def _process_payout(conn: Any, payout: dict) -> dict:
+    claim = conn.execute(
+        "UPDATE payouts SET status='paying' WHERE id=? AND status='approved' RETURNING *",
+        (payout["id"],),
+    )
+    claimed_row = claim.fetchone()
+    conn.commit()  # A crash after this point must never grant an automatic replay.
+    if claimed_row is None:
+        return {"payout_id": payout["id"], "status": "not_claimed"}
+    payout = dict(claimed_row)  # Bind the receipt to claim-time amount and approval.
+    status, transaction_id, reason = _dispatch_result(payout)
+    persisted_status = "approved" if status == "not_called" else status
+    changed = conn.execute(
+        "UPDATE payouts SET status=?, paid_tx_id=?, "
+        "paid_at=CASE WHEN ?='paid' THEN datetime('now') ELSE NULL END, "
+        "failed_at=CASE WHEN ?='failed' THEN datetime('now') ELSE NULL END, failed_reason=? "
+        "WHERE id=? AND status='paying'",
+        (persisted_status, transaction_id if status == "paid" else None, status, status,
+         None if status == "paid" else reason, payout["id"]),
+    )
+    _require_changed_payout(conn, changed)
+    return {"payout_id": payout["id"], "status": status, "reason": reason}
+
+
+def _finish_cycle(conn: Any, cycle_id: str, original_status: str) -> dict:
+    row = conn.execute(
+        "SELECT COUNT(*) AS unresolved, "
+        "SUM(CASE WHEN status IN ('paying','payment_unknown') THEN 1 ELSE 0 END) AS unknown_count, "
+        f"SUM(CASE WHEN status='paid' AND {_LEGACY_PLACEHOLDER_SQL} THEN 1 ELSE 0 END) AS legacy_count "
+        f"FROM payouts WHERE cycle_id=? AND (status NOT IN ('paid','failed') OR "
+        f"(status='paid' AND {_LEGACY_PLACEHOLDER_SQL}))",
+        (cycle_id,),
+    ).fetchone()
+    legacy = int(row["legacy_count"] or 0)
+    unresolved, unknown = int(row["unresolved"]), int(row["unknown_count"] or 0) + legacy
+    status = "processed" if unresolved == 0 else "processing" if unknown else original_status
+    changed = conn.execute(
+        "UPDATE payout_cycles SET status=?, "
+        "processed_at=CASE WHEN ?='processed' THEN datetime('now') ELSE NULL END "
+        "WHERE id=? AND status='processing'",
+        (status, status, cycle_id),
+    )
+    _require_changed_payout(conn, changed)
+    return {"cycle_status": status, "cycle_complete": unresolved == 0,
+            "unresolved_count": unresolved, "unknown_count": unknown,
+            "blocked_legacy_receipt_count": legacy}
+
+
+def _dispatch_payout(payout: dict) -> PayoutDispatchReceipt:
+    """No PayPal/bank adapter exists: block before any external I/O."""
+    raise PayoutNotDispatched("payment_provider_not_configured")
 
 
 # =========================================================================
@@ -448,7 +605,7 @@ def resolve_dispute(
         ).fetchone()
         if d and d["payout_id"]:
             conn.execute(
-                "UPDATE payouts SET status='pending', hold_reason=NULL WHERE id = ?",
+                "UPDATE payouts SET status='pending', hold_reason=NULL WHERE id = ? AND status='held'",
                 (d["payout_id"],),
             )
     conn.commit()

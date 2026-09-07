@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run five fixed PG regressions on a newly owned, Unix-socket-only cluster.
+"""Run a fixed PG regression suite on a newly owned, Unix-socket-only cluster.
 
 Default: plan only. --execute creates no application service, uses no snapshot,
 and retains evidence/data files after stopping only its disposable PostgreSQL.
@@ -34,6 +34,173 @@ TESTS = (
     'tests/test_skill_registry.py::test_record_then_readback_roundtrip',
     'tests/test_skill_registry.py::test_acceptance_stats_three_state',
 )
+PRECISION_COST_TESTS = (
+    'tests/test_apify_cost_reconciliation_pg.py::test_first_record_late_charge_and_replay_are_atomic',
+    'tests/test_apify_cost_reconciliation_pg.py::test_concurrent_run_observers_apply_one_delta',
+    'tests/test_apify_cost_reconciliation_pg.py::test_nowait_cap_lock_rolls_back_initial_detail_then_existing_run_retries',
+    'tests/test_apify_cost_reconciliation_pg.py::test_real_sql_failure_rolls_back_three_books_and_preserves_sqlstate',
+    'tests/test_llm_cost_precision_pg.py::test_real_postgres_concurrent_settlement_has_no_lost_micro',
+    'tests/test_budget_window_roll_concurrency_pg.py::test_roll_lock_serializes_reset_before_concurrent_cost_increment',
+    'tests/test_budget_window_roll_concurrency_pg.py::test_record_cost_concurrent_scope_delete_fails_and_rolls_back_ledger',
+    'tests/test_smart_search_draft_lock_pg.py::test_owner_session_row_lock_serializes_draft_reuse',
+)
+PRECISION_COST_SOURCES = (
+    'backend/app/domains/costs/apify_cost_reconciliation.py',
+    'backend/app/domains/costs/budget_guard.py',
+    'backend/app/domains/costs/budget_guard_persistence.py',
+    'backend/app/domains/costs/budget_window_roll.py',
+    'backend/app/platform/llm_budget_reservations.py',
+    'backend/app/db/connection.py',
+    'backend/app/domains/projects/workflow_projects.py',
+    'tests/conftest.py',
+    'migrations/275_vkpi_llm_cost_precision.sql',
+    'scripts/ops/run_synthetic_pg_regressions.py',
+    'scripts/ops/rehearse_migrations_307_310.py',
+)
+SEARCH_LIFECYCLE_TESTS = (
+    'tests/test_search_lifecycle_pg.py::test_summary_and_terminal_lane_serialize_with_item_foreign_keys',
+    'tests/test_search_lifecycle_pg.py::test_ready_child_rebuild_waits_and_preserves_failed_execution',
+    'tests/test_search_lifecycle_pg.py::test_old_attempt_failure_waits_and_cannot_change_new_attempt',
+    'tests/test_search_lifecycle_pg.py::test_old_normal_finalization_waits_and_cannot_finish_new_attempt',
+    'tests/test_search_lifecycle_pg.py::test_late_normal_finalization_preserves_current_failure',
+)
+SEARCH_LIFECYCLE_SOURCES = (
+    'backend/app/domains/kol/search_execution_observation.py',
+    'backend/app/domains/kol/search_execution_fence.py',
+    'backend/app/domains/kol/profile_discovery_pipeline_stages.py',
+    'backend/app/domains/kol/search_sessions.py',
+    'backend/app/domains/kol/search_sessions_attachment_status.py',
+    'backend/app/domains/kol/search_sessions_lanes.py',
+    'backend/app/domains/kol/search_session_job_analysis.py',
+    'backend/app/domains/kol/search_sessions_items.py',
+    'backend/app/domains/kol/search_sessions_serde.py',
+    'backend/app/db/connection.py',
+    'tests/conftest.py',
+    'scripts/ops/run_synthetic_pg_regressions.py',
+    'scripts/ops/rehearse_migrations_307_310.py',
+)
+COMMUNICATION_TRUTH_TESTS = (
+    'tests/test_recommendation_outcomes_pg.py::test_assignment_stage_sync_maps_device_sent_and_skips_missing_recommendation',
+    'tests/test_gtm_outreach_truth_bridge_pg.py::test_migration_277_real_pg_up_down_fk_and_immutable_triggers',
+    'tests/test_gtm_outreach_truth_bridge_pg.py::test_real_pg_parent_locks_block_pool_project_and_message_phantoms',
+    'tests/test_message_capture_truth_pg.py::test_both_message_writers_commit_correct_member_and_project_unknown',
+    'tests/test_message_capture_truth_pg.py::test_bad_identity_and_database_constraint_do_not_leave_partial_capture',
+    'tests/test_communication_truth_pg.py::test_record_sync_refresh_and_legacy_reads_never_claim_transport',
+    'tests/test_gtm_manual_truth_pg.py::test_domain_receipts_replay_and_event_rollback_stay_manager_attested',
+)
+COMMUNICATION_TRUTH_SOURCES = (
+    'backend/app/shared/communication_truth.py',
+    'backend/app/shared/message_truth.py',
+    'backend/app/domains/kol/profile_detail.py',
+    'backend/app/domains/evidence/messages.py',
+    'backend/app/domains/evidence/message_truth.py',
+    'backend/app/domains/evidence/common.py',
+    'backend/app/domains/projects/workflow_evidence_project_writes.py',
+    'backend/app/domains/projects/workflow_detail_sections.py',
+    'backend/app/domains/recommendations/outcomes.py',
+    'backend/app/domains/recommendations/outcome_sync.py',
+    'backend/app/domains/recommendations/communication_evidence.py',
+    'backend/app/domains/recommendations/outcome_refresh_project_links.py',
+    'backend/app/domains/recommendations/rerank_fit.py',
+    'backend/app/domains/recommendations/rerank_shadow.py',
+    'backend/app/domains/market_brain/outreach_truth_bridge.py',
+    'backend/app/domains/market_brain/outreach_reply_truth.py',
+    'backend/app/domains/market_brain/outreach_reply_receipt_validation.py',
+    'backend/app/domains/market_brain/outreach_truth_coverage.py',
+    'backend/app/domains/market_brain/prediction_truth.py',
+    'backend/app/domains/actions/approval_evidence.py',
+    'backend/app/domains/platform/review_contract.py',
+    'backend/app/domains/platform/event_ledger.py',
+    'backend/app/db/connection.py',
+    'migrations/277_vkpi_action_outreach_truth_bridge.sql',
+    'migrations/277_vkpi_action_outreach_truth_bridge_down.sql',
+    'migrations/288_vkpi_recommendation_feature_snapshot.sql',
+    'tests/test_gtm_outreach_truth_bridge.py',
+    'tests/test_message_capture_truth.py',
+    'tests/conftest.py',
+    'scripts/ops/run_synthetic_pg_regressions.py',
+    'scripts/ops/rehearse_migrations_307_310.py',
+    'scripts/ops/trusted_runtime_binary.py',
+    'scripts/ops/safe_python.sh',
+    'scripts/ops/safe_python_router.py',
+)
+KPI_EXPERIMENT_TRUTH_TESTS = (
+    'tests/test_kpi_experiment_truth_pg.py::test_kpi_grouped_numeric_date_scope_preserves_recorded_and_unknown',
+    'tests/test_kpi_experiment_truth_pg.py::test_staff_grouped_ledger_cannot_restore_legacy_credit',
+    'tests/test_kpi_experiment_truth_pg.py::test_kpi_upsert_replay_retains_old_derived_and_excludes_transport',
+    'tests/test_kpi_experiment_truth_pg.py::test_experiment_boolean_groups_recompute_labels_and_keep_pending',
+    'tests/test_kpi_experiment_truth_pg.py::test_experiment_missing_outcomes_table_preserves_unknown_denominator',
+    'tests/test_kpi_experiment_truth_pg.py::test_experiment_empty_window_and_missing_snapshot_do_not_invent_zero_rate',
+)
+KPI_EXPERIMENT_TRUTH_SOURCES = (
+    'backend/app/shared/communication_truth.py',
+    'backend/app/domains/kol/profile_detail.py',
+    'backend/app/shared/vkpi_kpi_communication_truth.py',
+    'backend/app/shared/vkpi_decision_common.py',
+    'backend/app/shared/vkpi_kpi_evidence.py',
+    'backend/app/shared/vkpi_kpi_evidence_enrichment.py',
+    'backend/app/domains/staff/decision_staff_kpi.py',
+    'backend/app/domains/staff/kpi_ledger.py',
+    'backend/app/domains/staff/kpi_rollup.py',
+    'backend/app/domains/experiments/scoring.py',
+    'backend/app/domains/recommendations/communication_evidence.py',
+    'backend/app/domains/recommendations/rerank_fit.py',
+    'backend/app/domains/recommendations/rerank_shadow.py',
+    'backend/app/domains/business_truth.py',
+    'backend/app/db/connection.py',
+    'tests/conftest.py',
+    'scripts/ops/run_synthetic_pg_regressions.py',
+    'scripts/ops/rehearse_migrations_307_310.py',
+    'scripts/ops/trusted_runtime_binary.py',
+    'scripts/ops/safe_python.sh',
+    'scripts/ops/safe_python_router.py',
+)
+SHIPMENT_CONCURRENCY_TESTS = (
+    'tests/test_shipment_dispatch_pg.py::test_same_tracking_concurrent_records_wait_and_reuse_one_receipt',
+    'tests/test_shipment_dispatch_pg.py::test_concurrent_rejection_commits_before_dispatch_and_blocks_all_records',
+)
+SHIPMENT_CONCURRENCY_SOURCES = (
+    'backend/app/shared/message_truth.py',
+    'backend/app/domains/evidence/message_truth.py',
+    'backend/app/domains/projects/workflow_evidence_project_writes.py',
+    'backend/app/domains/projects/workflow_common.py',
+    'backend/app/domains/projects/shipment_approval.py',
+    'backend/app/domains/projects/shipment_write_guard.py',
+    'backend/app/db/connection.py',
+    'tests/conftest.py',
+    'scripts/ops/run_synthetic_pg_regressions.py',
+    'scripts/ops/rehearse_migrations_307_310.py',
+    'scripts/ops/trusted_runtime_binary.py',
+    'scripts/ops/safe_python.sh',
+    'scripts/ops/safe_python_router.py',
+)
+PAYOUT_REQUEST_TESTS = (
+    'tests/test_payout_request_pg.py::test_concurrent_accrual_waits_and_creates_one_pending_payout',
+    'tests/test_payout_request_pg.py::test_processing_waits_for_accrual_and_cannot_complete_pending_payout',
+)
+PAYOUT_REQUEST_SOURCES = (
+    'backend/app/services/commerce/payouts.py',
+    'backend/app/db/connection.py',
+    'backend/app/db/connection_sql_translation.py',
+    'migrations/015_v5_commerce_admin_schema.sql',
+    'tests/conftest.py',
+    'scripts/ops/run_synthetic_pg_regressions.py',
+    'scripts/ops/rehearse_migrations_307_310.py',
+    'scripts/ops/trusted_runtime_binary.py',
+    'scripts/ops/safe_python.sh',
+    'scripts/ops/safe_python_router.py',
+)
+SUITES = {'default': TESTS, 'precision-cost': PRECISION_COST_TESTS,
+          'search-lifecycle': SEARCH_LIFECYCLE_TESTS, 'communication-truth': COMMUNICATION_TRUTH_TESTS,
+          'kpi-experiment-truth': KPI_EXPERIMENT_TRUTH_TESTS, 'shipment-concurrency': SHIPMENT_CONCURRENCY_TESTS,
+          'payout-request': PAYOUT_REQUEST_TESTS}
+SUITE_TIMEOUTS = {'default': 60, 'precision-cost': 120, 'search-lifecycle': 60, 'communication-truth': 120,
+                  'kpi-experiment-truth': 120, 'shipment-concurrency': 60, 'payout-request': 60}
+SUITE_SOURCES = {'precision-cost': PRECISION_COST_SOURCES, 'search-lifecycle': SEARCH_LIFECYCLE_SOURCES,
+                 'communication-truth': COMMUNICATION_TRUTH_SOURCES,
+                 'kpi-experiment-truth': KPI_EXPERIMENT_TRUTH_SOURCES,
+                 'shipment-concurrency': SHIPMENT_CONCURRENCY_SOURCES,
+                 'payout-request': PAYOUT_REQUEST_SOURCES}
 SEED_MIGRATION = ROOT / 'migrations/199_vkpi_skill_runs.sql'
 
 
@@ -63,11 +230,11 @@ def _command(arguments, output: Path, name: str, env, *, timeout=30):
                               stdout=handle, stderr=subprocess.STDOUT, timeout=timeout, check=False)
 
 
-def _pytest_summary(path: Path) -> dict[str, int]:
+def _pytest_summary(path: Path, tests: tuple[str, ...] = TESTS) -> dict[str, int]:
     cases = ElementTree.parse(path).getroot().findall('.//testcase')
-    expected = {(t.split('::')[0][:-3].replace('/', '.'), t.split('::')[1]) for t in TESTS}
+    expected = {(t.split('::')[0][:-3].replace('/', '.'), t.split('::')[1]) for t in tests}
     actual = {(case.get('classname'), case.get('name')) for case in cases}
-    safety._check(len(cases) == len(TESTS) and actual == expected, 'unexpected_pg_test_scope')
+    safety._check(len(cases) == len(tests) and actual == expected, 'unexpected_pg_test_scope')
     counts = {name: sum(case.find(name) is not None for case in cases)
               for name in ('failure', 'error', 'skipped')}
     safety._check(not any(counts.values()), 'pg_regression_incomplete')
@@ -89,7 +256,23 @@ def _stop_owned(cluster, binding, pg_ctl, output, report):
     report['cleanup']['owned_cluster_stopped'] = True
 
 
-def run_regressions() -> dict:
+def _seed_suite(conn, suite: str, report: dict) -> None:
+    if suite in {'precision-cost', 'search-lifecycle', 'communication-truth', 'kpi-experiment-truth', 'shipment-concurrency', 'payout-request'}:
+        report['synthetic_seed'] = {'kind': 'test_owned_scratch_schemas_only',
+                                    'schema_migrations_modified': False}
+        return
+    safety._check(SEED_MIGRATION.is_file() and not SEED_MIGRATION.is_symlink(),
+                  'synthetic_seed_regular_file_required')
+    payload = SEED_MIGRATION.read_bytes()
+    conn.execute(payload.decode('utf-8'))
+    report['synthetic_seed'] = {'migration': SEED_MIGRATION.name,
+                                'sha256': hashlib.sha256(payload).hexdigest(),
+                                'schema_migrations_modified': False}
+
+
+def run_regressions(*, suite: str = 'default') -> dict:
+    safety._check(suite in SUITES, 'unknown_fixed_pg_suite')
+    tests = SUITES[suite]
     # The rehearsal's libpq guard also rejects PG* names before connecting.
     # Refuse ambient application DSNs rather than allowing accidental inheritance.
     if any(k.startswith('PG') or k in {'DATABASE_URL', 'LOCAL_DATABASE_URL', 'DATABASE_POOL_URL'} for k in os.environ):
@@ -101,9 +284,11 @@ def run_regressions() -> dict:
     for name in ('socket', 'home', 'tmp'):
         (cluster / name).mkdir(mode=0o700)
     report = {'synthetic_only': True, 'business_database_accessed': False, 'provider_calls': 0,
-              'status': 'failed', 'tests': list(TESTS), 'started_at': _now(), 'cleanup': {},
+              'status': 'failed', 'suite': suite, 'tests': list(tests), 'started_at': _now(), 'cleanup': {},
               'output': str(output), 'cluster_root': str(cluster),
-              'test_hashes': {t.split('::')[0]: hashlib.sha256((ROOT / t.split('::')[0]).read_bytes()).hexdigest() for t in TESTS}}
+              'test_hashes': {t.split('::')[0]: hashlib.sha256((ROOT / t.split('::')[0]).read_bytes()).hexdigest() for t in tests},
+              'source_hashes': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+                                for name in SUITE_SOURCES.get(suite, ())}}
     stage, start_requested, binding, admin, target, target_oid = 'initdb', False, None, None, '', None
     try:
         result = _command([initdb, '-D', str(cluster / 'data'), '-U', 'postgres', '-A', 'trust',
@@ -130,22 +315,17 @@ def run_regressions() -> dict:
         safety._check(target_oid is not None, 'synthetic_database_identity_missing')
         with safety._connect(binding, target) as conn:
             safety._verify_server(conn, binding, target)
-            stage = 'seed_synthetic_skill_ledger'
-            safety._check(SEED_MIGRATION.is_file() and not SEED_MIGRATION.is_symlink(),
-                          'synthetic_seed_regular_file_required')
-            payload = SEED_MIGRATION.read_bytes()
-            conn.execute(payload.decode('utf-8'))
-            report['synthetic_seed'] = {'migration': SEED_MIGRATION.name,
-                                        'sha256': hashlib.sha256(payload).hexdigest(),
-                                        'schema_migrations_modified': False}
+            stage = 'seed_synthetic_suite'
+            _seed_suite(conn, suite, report)
         stage = 'pytest'
         result = _command([str(ROOT / 'scripts/ops/safe_python.sh'), '-m', 'pytest', '-q', '-rA',
-                           '--junitxml=' + str(output / 'pytest.xml'), *TESTS],
-                          output, 'pytest.log', _environment(cluster, target), timeout=60)
+                           '--junitxml=' + str(output / 'pytest.xml'), *tests],
+                          output, 'pytest.log', _environment(cluster, target),
+                          timeout=SUITE_TIMEOUTS[suite])
         report.update(pytest_exit_code=result.returncode, pytest_log=str(output / 'pytest.log'),
                       pytest_junit=str(output / 'pytest.xml'))
         safety._check(result.returncode == 0, 'pg_regression_failed')
-        report['test_counts'] = _pytest_summary(output / 'pytest.xml')
+        report['test_counts'] = _pytest_summary(output / 'pytest.xml', tests)
         report['status'] = 'passed'
     except Exception as exc:
         report.update(failed_stage=stage, error_type=type(exc).__name__)
@@ -177,9 +357,10 @@ def run_regressions() -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute', action='store_true')
+    parser.add_argument('--suite', choices=tuple(SUITES), default='default')
     args = parser.parse_args(argv)
-    report = run_regressions() if args.execute else {
-        'status': 'plan_only', 'tests': list(TESTS), 'database_connections': 0,
+    report = run_regressions(suite=args.suite) if args.execute else {
+        'status': 'plan_only', 'suite': args.suite, 'tests': list(SUITES[args.suite]), 'database_connections': 0,
         'synthetic_only': True, 'requires_explicit_execute': True,
     }
     sys.stdout.write(json.dumps(report, ensure_ascii=False) + '\n')

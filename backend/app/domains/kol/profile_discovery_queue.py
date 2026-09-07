@@ -18,6 +18,7 @@ from app.domains.kol import (
 )
 from app.domains.kol.discovery_filters import _int, _staff_user_id, _text
 from app.domains.kol.profile_discovery_supply import sanitize_platform_limits
+from app.domains.kol.profile_discovery_queue_request import smart_profile_recall_filters
 from app.domains.kol.provider_job_access import (
     FENCE_KEY as PROVIDER_JOB_FENCE_KEY,
     SESSION_ADVANCE,
@@ -26,6 +27,8 @@ from app.domains.kol.provider_job_access import (
     build_search_session_provider_fence,
 )
 from app.domains.kol.search_progress_contract import completion_contract
+from app.domains.kol.search_mode import normalize_search_mode
+from app.domains.kol.operator_search_spec import normalize_operator_body
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 
 
@@ -421,24 +424,7 @@ def _ensure_smart_profile_session(
 
 
 def _smart_profile_recall_filters(body: dict[str, Any]) -> dict[str, Any]:
-    if body.get("filters") not in (None, "") and not isinstance(body.get("filters"), dict):
-        raise ValueError("filters must be an object")
-    recall_filters = dict(body.get("filters") or {})
-    if body.get("platforms") and not recall_filters.get("platforms"):
-        recall_filters["platforms"] = body.get("platforms")
-    for filter_key in (
-        "countries",
-        "languages",
-        "followers_min",
-        "followers_max",
-        "follower_min",
-        "follower_max",
-        "verticals",
-        "gear_content",
-    ):
-        if body.get(filter_key) not in (None, "") and filter_key not in recall_filters:
-            recall_filters[filter_key] = body.get(filter_key)
-    return recall_filters
+    return smart_profile_recall_filters(body, normalize_body=normalize_operator_body)
 
 
 def _smart_profile_result_limit(body: dict[str, Any]) -> int:
@@ -473,6 +459,15 @@ def _smart_profile_payload(
         "derive_method": "kol_smart_search_profile_advance",
         "search_session_id": session_id,
         "query_text": query,
+        "search_mode": normalize_search_mode(body.get("search_mode")),
+        "creator_countries": body.get("creator_countries"),
+        "audience_markets": body.get("audience_markets"),
+        "strict_gates": body.get("strict_gates"),
+        "gate_mode": body.get("gate_mode"),
+        "hide_team_favorites": body.get("hide_team_favorites"),
+        "auto_filters": body.get("auto_filters", False),
+        "auto_relax": body.get("auto_relax", False),
+        "dropped_auto_filters": body.get("dropped_auto_filters"),
         "product_sku": _text(body.get("product_sku")),
         # Worker rebuilds the authoritative SearchBrief/QueryCells server-side.
         "objective": targeted_search_contract.normalize_objective(body),

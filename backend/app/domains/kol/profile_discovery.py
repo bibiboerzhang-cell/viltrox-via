@@ -243,6 +243,7 @@ async def discover_new_creators(
     exclude_chinese: bool = True,
     page_cursors: Any = None,
     exact_query: bool = False,
+    provider_discovery_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # 与 profile_discovery_provider.discover_new_creators 签名同集(守卫测试
     # test_profile_discovery_facade_signature);流水线经 _PIPELINE_COMPAT 拿到的是本壳。
@@ -265,6 +266,8 @@ async def discover_new_creators(
             exclude_chinese=exclude_chinese,
             page_cursors=page_cursors,
             exact_query=exact_query,
+            **({"provider_discovery_policy": provider_discovery_policy}
+               if provider_discovery_policy is not None else {}),
         )
 
 

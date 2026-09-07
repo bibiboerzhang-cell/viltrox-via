@@ -11,6 +11,8 @@ from app.db.connection import get_conn
 from app.domains import audit
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
+from app.domains.recommendations.communication_evidence import LABEL_SEMANTICS, LABEL_SEMANTICS_VERSION, communication_evidence
+from app.domains.recommendations.rerank_fit import POSITIVE_NODES, label_for_outcome
 
 logger = get_logger(__name__)
 
@@ -147,11 +149,46 @@ def activate_model(model_version: str, *, staff: dict[str, Any] | None = None) -
     return models()
 
 
-def rerank_arm_summary(days: int = 30) -> dict[str, Any]:
-    """W-L2 A/B arm 只读汇总:开关状态 + 近 N 天各 arm 的快照数 / 已标注正例率(纯读,零写入)。
+def _arm_observation_groups(conn: Any, snapshot_table: str, cutoff: str, *, outcomes_available: bool) -> list[Any]:
+    # Group by the small Boolean outcome vocabulary instead of loading every
+    # snapshot. Both PostgreSQL BOOLEAN and SQLite 0/1 use the same query shape.
+    fields = ", ".join(f"o.{key}" for key in (*POSITIVE_NODES, "was_rejected"))
+    projection = f", {fields}" if outcomes_available else ""
+    join = "LEFT JOIN vkpi_recommendation_outcomes o ON o.recommendation_id=s.recommendation_id" if outcomes_available else ""
+    return conn.execute(
+        f"""
+        SELECT s.arm, COUNT(*) AS snapshots,
+               SUM(CASE WHEN s.rerank_applied THEN 1 ELSE 0 END) AS applied{projection}
+        FROM {snapshot_table} s {join}
+        WHERE s.created_at >= ?
+        GROUP BY s.arm{projection}
+        """, (cutoff,),
+    ).fetchall()
 
-    这是实验域对「影子重排序 A/B」的唯一读口:arm 由 rerank_shadow.arm_for_staff 按 staff 哈希分流,
-    这里只把分流结果与结果标签按 arm 聚合,供运营判断 treatment 是否真有提升;不暴露权重与公式。
+
+def _summarize_arm_groups(rows: list[Any]) -> dict[str, dict[str, Any]]:
+    arms: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        row = dict(raw)
+        item = arms.setdefault(str(row.get("arm") or "off"), {
+            "snapshots": 0, "applied": 0, "labeled": 0, "positives": 0, "positive_rate": None,
+        })
+        count = int(row.get("snapshots") or 0)
+        item["snapshots"] += count
+        item["applied"] += int(row.get("applied") or 0)
+        label, _ = label_for_outcome(row, recommended_at=None)
+        if label is not None:
+            item["labeled"] += count
+            item["positives"] += count if label == 1 else 0
+    for item in arms.values():
+        item["positive_rate"] = round(item["positives"] / item["labeled"], 4) if item["labeled"] else None
+    return arms
+
+
+def rerank_arm_summary(days: int = 30) -> dict[str, Any]:
+    """按 arm 观察当前非通信运营偏好；不是转化率、训练就绪或模型效果证明。
+
+    不读取旧 snapshot.outcome_label；缺 outcome 或无资格保持 pending。
     """
     from app.db.connection import table_exists
     from app.domains.recommendations import rerank_shadow
@@ -162,35 +199,24 @@ def rerank_arm_summary(days: int = 30) -> dict[str, Any]:
         "treatment_pct": rerank_shadow.treatment_pct(),
         "window_days": int(max(1, min(int(days or 30), 365))),
         "arms": {},
+        "pending_by_arm": {},
+        "label_semantics": LABEL_SEMANTICS,
+        "label_semantics_version": LABEL_SEMANTICS_VERSION,
+        "claim_status": "descriptive_only",
+        "algorithm_effect_status": "not_evaluated",
+        "communication_evidence": communication_evidence(),
+        "metric_note": "positive_rate仅为有明确运营偏好标签者的正向比例；不代表收发、转化、KOL精准度或算法效果。",
         "provider_calls": False,
+        "provider_calls_scope": "this_read_only_summary",
         "write_db": False,
     }
     if not table_exists(rerank_shadow.SNAPSHOT_TABLE):
         summary["status"] = "snapshot_table_missing"
         return summary
-    rows = get_conn().execute(
-        f"""
-        SELECT arm,
-               COUNT(*) AS snapshots,
-               SUM(CASE WHEN rerank_applied THEN 1 ELSE 0 END) AS applied,
-               SUM(CASE WHEN outcome_label IS NOT NULL THEN 1 ELSE 0 END) AS labeled,
-               SUM(CASE WHEN outcome_label = 1 THEN 1 ELSE 0 END) AS positives
-        FROM {rerank_shadow.SNAPSHOT_TABLE}
-        WHERE created_at >= ?
-        GROUP BY arm
-        """,
-        ((datetime.now(timezone.utc) - timedelta(days=summary["window_days"])).strftime("%Y-%m-%dT%H:%M:%SZ"),),
-    ).fetchall()
-    for raw in rows:
-        row = dict(raw)
-        labeled = int(row.get("labeled") or 0)
-        positives = int(row.get("positives") or 0)
-        summary["arms"][str(row.get("arm") or "off")] = {
-            "snapshots": int(row.get("snapshots") or 0),
-            "applied": int(row.get("applied") or 0),
-            "labeled": labeled,
-            "positives": positives,
-            "positive_rate": round(positives / labeled, 4) if labeled else None,
-        }
-    summary["status"] = "ok" if rows else "no_snapshots_in_window"
+    outcomes_available = table_exists("vkpi_recommendation_outcomes")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=summary["window_days"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = _arm_observation_groups(get_conn(), rerank_shadow.SNAPSHOT_TABLE, cutoff, outcomes_available=outcomes_available)
+    summary["arms"] = _summarize_arm_groups(rows)
+    summary["pending_by_arm"] = {arm: row["snapshots"] - row["labeled"] for arm, row in summary["arms"].items()}
+    summary["status"] = ("ok" if rows else "no_snapshots_in_window") if outcomes_available else "outcome_table_missing"
     return summary

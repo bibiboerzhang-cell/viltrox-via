@@ -9,6 +9,9 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.kol import pool as kol_pool
 from app.domains.recommendations import outcomes as outcome_collector
+from app.domains.recommendations.communication_evidence import (
+    COMMUNICATION_NODES, communication_evidence, project_outcome_communications,
+)
 from app.domains import audit
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
@@ -104,6 +107,7 @@ def _project_evidence_rows(
             kol_id,
         ),
     )
+    projects = [row for row in projects if _matches_evidence_project(row, recommendation_id, kol_id)]
     project_ids = [
         int(row.get("id") or 0)
         for row in projects
@@ -124,10 +128,12 @@ def _project_evidence_rows(
         }
     placeholders = ",".join("?" for _ in project_ids)
     params = tuple(project_ids)
+    from app.domains.evidence.message_truth import project_message_record
+
     return {
         "projects": projects,
         "links": _safe_rows(f"SELECT * FROM vkpi_links WHERE project_id IN ({placeholders}) ORDER BY created_at DESC, id DESC LIMIT 50", params),
-        "messages": _safe_rows(f"SELECT * FROM vkpi_messages WHERE project_id IN ({placeholders}) ORDER BY captured_at DESC, id DESC LIMIT 50", params),
+        "messages": [project_message_record(row) for row in _safe_rows(f"SELECT * FROM vkpi_messages WHERE project_id IN ({placeholders}) ORDER BY captured_at DESC, id DESC LIMIT 50", params)],
         "content": _safe_rows(f"SELECT * FROM vkpi_content_posts WHERE project_id IN ({placeholders}) ORDER BY COALESCE(published_at, created_at) DESC, id DESC LIMIT 50", params),
         "costs": _safe_rows(f"SELECT * FROM vkpi_cost_ledger WHERE project_id IN ({placeholders}) ORDER BY incurred_at DESC, id DESC LIMIT 50", params),
         "attribution": _safe_rows(f"SELECT * FROM vkpi_sales_attributions WHERE project_id IN ({placeholders}) ORDER BY COALESCE(occurred_at, imported_at, created_at) DESC, id DESC LIMIT 50", params),
@@ -136,6 +142,16 @@ def _project_evidence_rows(
         "samples": _safe_rows(f"SELECT * FROM vkpi_sample_assets WHERE project_id IN ({placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 50", params),
         "shipments": _safe_rows(f"SELECT * FROM vkpi_shipments WHERE project_id IN ({placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 50", params),
     }
+
+
+def _matches_evidence_project(row: dict[str, Any], recommendation_id: int, kol_id: int) -> bool:
+    metadata = _loads(row.get("metadata_json"), {})
+    if not isinstance(metadata, dict):
+        return False
+    if "recommendation_id" in metadata:
+        value = metadata["recommendation_id"]
+        return type(value) is int and value == recommendation_id
+    return kol_id > 0 and row.get("kol_id") == kol_id
 
 
 def _shopify_order_rows(attribution: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -345,7 +361,7 @@ def get_recommendation_evidence(recommendation_id: int, *, staff: dict[str, Any]
 
 
 def recommendation_outcome_summary(launch_id: int | None = None, run_id: int | None = None, limit: int = 50) -> dict[str, Any]:
-    """Return real outcome conversion for Product Analysis recommendations."""
+    """Return recorded outcomes; unverified transport counts remain unknown."""
     ensure_vkpi_product_industry_schema()
     where: list[str] = []
     params: list[Any] = []
@@ -365,8 +381,8 @@ def recommendation_outcome_summary(launch_id: int | None = None, run_id: int | N
             COALESCE(SUM({_bool_count_expr("o.was_rejected")}), 0) AS rejected,
             COALESCE(SUM({_bool_count_expr("o.was_claimed")}), 0) AS claimed,
             COALESCE(SUM({_bool_count_expr("o.project_created")}), 0) AS project_created,
-            COALESCE(SUM({_bool_count_expr("o.outreach_sent")}), 0) AS outreach_sent,
-            COALESCE(SUM({_bool_count_expr("o.reply_received")}), 0) AS reply_received,
+            NULL AS outreach_sent,
+            NULL AS reply_received,
             COALESCE(SUM({_bool_count_expr("o.agreement_reached")}), 0) AS agreement_reached,
             COALESCE(SUM({_bool_count_expr("o.content_published")}), 0) AS content_published,
             COALESCE(SUM({_bool_count_expr("o.order_attributed")}), 0) AS order_attributed,
@@ -381,6 +397,7 @@ def recommendation_outcome_summary(launch_id: int | None = None, run_id: int | N
         """,
         tuple(params),
     ).fetchone() or {})
+    totals.update(outreach_sent=None, reply_received=None)
     recommendations = int(totals.get("recommendations") or 0)
     conversion = {
         key: round(int(totals.get(key) or 0) / recommendations, 4) if recommendations else 0
@@ -396,6 +413,7 @@ def recommendation_outcome_summary(launch_id: int | None = None, run_id: int | N
             "order_attributed",
         )
     }
+    conversion.update({key: None for key in COMMUNICATION_NODES})
     by_status = [dict(row) for row in conn.execute(
         f"""
         SELECT COALESCE(r.status, 'unknown') AS status, COUNT(*) AS count
@@ -421,7 +439,7 @@ def recommendation_outcome_summary(launch_id: int | None = None, run_id: int | N
         """,
         tuple(params),
     ).fetchall()]
-    source_rows = [dict(row) for row in conn.execute(
+    source_rows = [project_outcome_communications(row) for row in conn.execute(
         f"""
         SELECT r.id AS recommendation_id, r.launch_id, r.run_id, r.kol_pool_id,
                r.linked_main_kol_id, r.platform, r.handle, r.display_name, r.rank, r.score,
@@ -440,6 +458,7 @@ def recommendation_outcome_summary(launch_id: int | None = None, run_id: int | N
         (*params, max(1, min(200, int(limit or 50)))),
     ).fetchall()]
     return {
+        "communication_evidence": communication_evidence(),
         "filters": {"launch_id": launch_id, "run_id": run_id},
         "totals": totals,
         "conversion": conversion,

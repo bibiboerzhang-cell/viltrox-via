@@ -97,7 +97,7 @@ export function useSmartKolInputPanelController({
   const [displayedSearchSessionId, setDisplayedSearchSessionId] = useState<number | null>(() => persistedDisplay?.activeSearchSessionId ?? null);
   const [pollingSearchSessionId, setPollingSearchSessionId] = useState<number | null>(() => {
     const persistedId = persistedDisplay?.activeSearchSessionId ?? null;
-    return persistedId && persistedDisplay?.activeSearchSession && !isSearchSessionTerminal(persistedDisplay.activeSearchSession)
+    return persistedId && (!persistedDisplay?.activeSearchSession || !isSearchSessionTerminal(persistedDisplay.activeSearchSession))
       ? persistedId
       : null;
   });
@@ -218,6 +218,7 @@ export function useSmartKolInputPanelController({
   const [personaDraft, setPersonaDraft] = useState("");
   const activeSessionCounts = sessionAdvanceCounts(activeSearchSession);
   const activeSessionSummary = asRecord(activeSearchSession?.result_summary);
+  const searchLanes = asRecord(activeSessionSummary.search_lanes || asRecord(advanceResult).search_lanes);
   const activeSmartJob = asRecord(activeSessionSummary.smart_search_profile_advance_job);
   const activeSessionStatus = cleanText(activeSmartJob.advance_status || activeSmartJob.status || activeSearchSession?.status);
   // F-display:AI 规划退回基础检索的诚实提示。读 result_summary.smart_search_profile_advance_job
@@ -436,10 +437,24 @@ export function useSmartKolInputPanelController({
     setSessionPollNotice("");
     try {
       const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms, contentLanguages);
+      const onlinePlatforms = strictOnlineDiscoveryPlatforms(discoveryPlatforms);
+      const requestedNetwork = nextMode === "text" && onlinePlatforms.length > 0;
       const response = await smartKolSearch(apiToken, query, {
         mode: "auto",
+        ...(nextMode === "text" ? {
+          searchMode: requestedNetwork ? "hybrid" as const : "saved" as const,
+          includeNewDiscovery: requestedNetwork,
+          executeNewDiscovery: requestedNetwork,
+          advanceLimit: KOL_SEARCH_RESULT_LIMIT,
+          representativeVideoLimit: 1,
+          newDiscoveryLimit: searchPolicy.newDiscoveryLimit,
+          newDiscoveryPerPlatformLimit: searchPolicy.perPlatformLimit,
+          newDiscoveryPerPlatformLimits: searchPolicy.perPlatformLimits,
+          newDiscoveryPlatforms: onlinePlatforms,
+          onlineQualificationSpec: ONLINE_QUALIFICATION_SPEC,
+        } : {}),
         objective: searchObjective,
-        maxPosts: 3,
+        maxPosts: requestedNetwork ? 12 : 3,
         // 30 是「筛选后目标」而非抓取前上限：先过采样，再由后端执行硬筛选、业务分桶与诚实补位。
         // 同时保留 limit/creator/reviewer 兼容旧服务；新服务以 result_limit/filters/bucket_policy 为准。
         candidateLimit: 500,
@@ -467,12 +482,32 @@ export function useSmartKolInputPanelController({
       const responseMode = cleanText(response.mode);
       const isText = !(responseMode === "url" || cleanText(response.query_type).startsWith("url_"));
       const responseRow = asRecord(response);
+      const queuedHybrid = requestedNetwork && cleanText(responseRow.branch) === "kol_recall_profile_advance_pipeline";
       const responseResult = asRecord(response.result);
       const responsePlan = asRecord(responseRow.llm_query_plan || responseResult.llm_query_plan);
-      const responseProductSku = cleanText(asRecord(responsePlan.resolved_product).sku);
       const needsProductClarification = cleanText(response.status || responsePlan.status) === "needs_clarification";
       let autoProfile: VkpiKolUrlDeepCrawlResponse | null = null;
       let autoVideo: VkpiKolUrlDeepCrawlResponse | null = null;
+      if (queuedHybrid) {
+        // The server accepted one job owning both lanes. No local preview POST
+        // or completion callback may enqueue a second provider-backed job.
+        setMode("text");
+        setUrlResult(null);
+        setRecallResult(null);
+        setRecallFingerprint(requestFingerprint);
+        setAdvanceResult(response as unknown as VkpiKolSmartSearchProfileAdvanceResponse);
+        const queuedSession = response.search_session as VkpiKolSearchHistoryItem | undefined;
+        if (queuedSession) applyPolledSession(queuedSession);
+        const sessionId = sessionIdFrom(queuedSession) || sessionIdFrom(responseRow.advance_job);
+        if (sessionId) {
+          setDisplayedSearchSessionId(sessionId);
+          setPollingSearchSessionId(sessionId);
+          setSessionPollNotice("本地与联网任务已受理，分别回填结果。");
+        }
+        setState("ready");
+        void refreshHistory();
+        return;
+      }
       if (!isText) {
         setMode("url");
         // 清屏与上屏同一拍:旧展示态活到响应到达为止,中间那段由骨架接管,不再出现空白结果区。
@@ -540,15 +575,10 @@ export function useSmartKolInputPanelController({
       }
       setState("ready");
       void refreshHistory();
-      // 刀1·流3(2026-06-16)恒开:任何文字搜索都自动触发全网发现(advance-job 全量,含所选平台),
-      // 不再挂在「深度查找」开关上 →「先库内召回 → 再全网发现」一步到位,本地+线上首屏同呈。
-      // 预算护栏 enforce 兜底超支(已确认放行)。
-      if (isText && !needsProductClarification) {
-        const previewSessionId = sessionIdFrom(response.search_session);
-        // Keep the continuation bound to this exact preview response. React state
-        // updates above are asynchronous, so reading llmPlan here would observe
-        // the previous render and could send product A into product B's job.
-        void queueTextAdvance(overrideQuery, requestEpoch, previewSessionId, responseProductSku);
+      if (isText && requestedNetwork && !needsProductClarification) {
+        // A legacy/malformed response is not proof that no job was accepted.
+        // Never "repair" uncertain acceptance with a second paid submission.
+        setSessionPollNotice("本地结果已返回；联网受理状态尚未确认，请查看任务记录。");
       }
       // 账号 URL 自动抓资料 + 入库(不再弹「抓基础资料」二次确认)。
       if (autoProfile) void runUrlExecute(autoProfile, { auto: true, requestEpoch });
@@ -682,6 +712,8 @@ export function useSmartKolInputPanelController({
     });
     const requestEpoch = parentEpoch ?? beginSearchRequest();
     if (parentEpoch == null) {
+      setMode("text");
+      setUrlResult(null);
       clearPickedIds();
       setRecallResult(null);
       setAdvanceResult(null);
@@ -703,6 +735,9 @@ export function useSmartKolInputPanelController({
       const onlinePlatforms = strictOnlineDiscoveryPlatforms(discoveryPlatforms);
       const productSku = cleanText(resolvedProductSku);
       const response = await smartKolSearchProfileAdvanceJob(apiToken, query, {
+        // Only a manual full-network action skips inventory. The established
+        // automatic preview continuation remains hybrid and adds no paid leg.
+        searchMode: parentEpoch == null ? (onlinePlatforms.length ? "fresh_network" : "saved") : "hybrid",
         objective: searchObjective,
         candidateLimit: 500,
         limit: KOL_SEARCH_RESULT_LIMIT,
@@ -804,7 +839,7 @@ export function useSmartKolInputPanelController({
     llmPlan, discoveryItems, discoveryTotal, discoveryAutoEnrolled,
     discoveryBrandExcluded: discoveryBrandExcludedFromSession(activeSearchSession),
     reachFloorDisplay, plannerFellBack, personaEditing, personaDraft,
-    setPersonaEditing, setPersonaDraft, run, queueTextAdvance,
+    setPersonaEditing, setPersonaDraft, run, queueTextAdvance, searchLanes,
     pickedIds, setPickedIds, favNote, favoriteIds, favoriteBusyIds, favoriteResults,
     favoriteErrors, favoritesSyncing, favoritesLoadError, draftNote, outreachNote,
     outreachResult, addingFav, draftBusy, outreachBusy, displayedSearchSessionId,

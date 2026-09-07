@@ -196,7 +196,7 @@ def approve_session(
         raise LookupError(f"search session not found: {session_id}")
     conn = (get_conn_fn or get_conn)()
     row = conn.execute(
-        "SELECT * FROM vkpi_kol_search_sessions WHERE id=? AND created_by=?",
+        "SELECT * FROM vkpi_kol_search_sessions WHERE id=? AND created_by=? FOR NO KEY UPDATE",
         (int(session_id), int(actor_id)),
     ).fetchone()
     if not row:

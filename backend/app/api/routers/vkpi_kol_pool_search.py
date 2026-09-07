@@ -21,6 +21,7 @@ import app.domains.kol.smart_query_planner as kol_smart_query_planner
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 from app.domains.kol import profile_discovery as kol_profile_discovery
 from app.domains.kol import targeted_search_runtime as kol_targeted_search_runtime
+from app.domains.kol.search_mode import normalize_search_mode
 from app.domains.projects import workflow as project_workflow
 from app.domains.projects import cost_estimate as project_cost_estimate
 from app.domains.projects import outreach as project_outreach
@@ -568,6 +569,8 @@ async def _smart_local_recall(
     result.setdefault("query", {})["explicit_operator_platforms"] = explicit_query_platforms
     result = kol_profile_recall_qualification.project_smart_local_result(result)
     result["llm_query_plan"] = plan
+    if targeted_context.get("operator_search_spec"):
+        result["operator_search_spec"] = targeted_context["operator_search_spec"]
     result["original_query_text"] = recall_query
     result["effective_query_text"] = effective_query
     result = _attach_smart_recall_session(
@@ -593,6 +596,8 @@ def _smart_discovery_payload(
     分支二(自动升级)是本刀新增:操作员没要、但库里没凑够人时系统把该做的抓取接上,
     并且**挂在他正在看的那条会话上**,否则进度面板四段永远等不到这批任务。
     """
+    if normalize_search_mode(body.get("search_mode")) == "saved":
+        return None
     requested = kol_search_escalation.requested_discovery_payload(
         body=body,
         recall_query=recall_query,
@@ -602,6 +607,10 @@ def _smart_discovery_payload(
     )
     if requested is not None:
         return requested
+    if body.get("search_mode") == "hybrid":
+        # Explicit source-mode requests without execution authorization remain
+        # local/planning-only. A default objective is not paid-call consent.
+        return None
     return kol_search_escalation.auto_escalated_discovery_payload(
         body=body,
         session_body=session_body or body,
@@ -675,9 +684,45 @@ async def _smart_text_search(body: dict, query_text: str, staff: dict) -> dict:
     }
 
 
+def _normalized_source_body(body: dict, search_mode: str) -> dict:
+    if "search_mode" not in body:
+        return body
+    normalized = {**body, "search_mode": search_mode}
+    for flag in ("include_new_discovery", "include_discovery", "execute_new_discovery"):
+        if flag in normalized:
+            normalized[flag] = _body_bool(normalized, flag, default=False)
+    return normalized
+
+
+async def _smart_source_dispatch(body: dict, query_text: str, branch: str, staff: dict) -> dict:
+    search_mode = normalize_search_mode(body.get("search_mode"))
+    body = _normalized_source_body(body, search_mode)
+    if branch == "url" and search_mode != "hybrid":
+        raise ValueError("search_mode is for text search; use the explicit URL workflow")
+    if branch == "url":
+        return smart_url_search_response(
+            body, query_text, staff, run_url_deep_crawl=_run_url_deep_crawl,
+            url_response_status=_url_response_status, smart_query_type=_smart_query_type,
+        )
+    if search_mode == "fresh_network":
+        # Existing queue owns authorization, budget and idempotency. Inventory
+        # availability is not a prerequisite for accepting this explicit mode.
+        return await smart_kol_search_profile_advance_job(body=body, staff=staff)
+    if (body.get("search_mode") == "hybrid"
+            and _body_bool(body, "include_new_discovery", default=False)
+            and _body_bool(body, "execute_new_discovery", default=False)):
+        # One authorized submission, one durable owner of both lanes. The API
+        # never repeats inventory recall or waits for it before queuing online.
+        return await smart_kol_search_profile_advance_job(body=body, staff=staff)
+    result = await _smart_text_search(body, query_text, staff)
+    if search_mode == "saved":
+        result["search_mode"] = "saved"
+    return result
+
+
 @router.post("/kol-smart-search")
 async def smart_kol_search(body: dict = Body(...), staff=Depends(require_tab("vkpi", "write"))) -> dict:
-    """Dispatch a URL or provider-free first-round text search."""
+    """Dispatch a URL, saved recall, or explicit fresh-network queue request."""
     query_text = str(body.get("input") or body.get("query") or body.get("query_text") or body.get("url") or "").strip()
     if not query_text:
         raise HTTPException(status_code=400, detail="input is required")
@@ -688,14 +733,7 @@ async def smart_kol_search(body: dict = Body(...), staff=Depends(require_tab("vk
     if mode == "text":
         branch = "recall"
     try:
-        if branch == "url":
-            return smart_url_search_response(
-                body, query_text, staff,
-                run_url_deep_crawl=_run_url_deep_crawl,
-                url_response_status=_url_response_status,
-                smart_query_type=_smart_query_type,
-            )
-        return await _smart_text_search(body, query_text, staff)
+        return await _smart_source_dispatch(body, query_text, branch, staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
@@ -714,6 +752,24 @@ async def smart_kol_search(body: dict = Body(...), staff=Depends(require_tab("vk
             status_code=503,
             detail="KOL 搜索服务暂时不可用，当前任务未被标记为完成；请稍后重试。",
         ) from exc
+
+
+async def _enqueue_smart_text_job(queue_kwargs: dict) -> dict:
+    if queue_kwargs["body"].get("search_mode") in {"hybrid", "fresh_network"}:
+        # Explicit online submissions use synchronous queue/database IO, but
+        # must leave the request loop available to progress and status reads.
+        return await run_in_threadpool(kol_profile_discovery.enqueue_smart_search_profile_advance, **queue_kwargs)
+    return kol_profile_discovery.enqueue_smart_search_profile_advance(**queue_kwargs)
+
+
+def _smart_hybrid_queue_lanes(body: dict, queued: dict) -> dict:
+    if body.get("search_mode") != "hybrid":
+        return {}
+    status = queued.get("status") or "unknown"
+    return {"search_lanes": {
+        "local": {"status": "queued" if status in {"queued", "already_queued"} else "not_started", "returned_count": None},
+        "online": {"status": status, "returned_count": None},
+    }}
 
 
 @router.post("/kol-smart-search/profile-advance-job")
@@ -738,6 +794,15 @@ async def smart_kol_search_profile_advance_job(
     queue_pipeline = True
 
     try:
+        search_mode = normalize_search_mode(body.get("search_mode"))
+        body = _normalized_source_body(body, search_mode)
+        if search_mode == "saved":
+            # A saved-only request never enters the provider-capable advance queue.
+            result = await _smart_text_search(body, query_text, staff)
+            result["search_mode"] = "saved"
+            return result
+        if search_mode == "fresh_network" and not _body_bool(body, "include_new_discovery", default=True):
+            raise ValueError("fresh_network conflicts with include_new_discovery=false")
         if queue_pipeline:
             normalized_market = kol_profile_discovery.resolve_market_constraint(
                 query_text,
@@ -745,17 +810,15 @@ async def smart_kol_search_profile_advance_job(
             )
             # P0-1 命门(100 人并发):请求侧不再同步跑 LLM planner(冷启~15s,会打爆 threadpool/provider)。
             # raw query 入队 → worker 的 execute_smart_search_profile_advance_pipeline 跑 planner+recall+advance。
-            queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
-                query_text=query_text,
-                body={
-                    **body,
-                    **({"market": normalized_market} if normalized_market else {}),
-                    "original_query_text": query_text,
-                },
-                staff=staff,
-            )
+            queue_kwargs = {"query_text": query_text, "body": {
+                **body, **({"market": normalized_market} if normalized_market else {}),
+                "original_query_text": query_text,
+            }, "staff": staff}
+            queued = await _enqueue_smart_text_job(queue_kwargs)
             return {
                 "status": queued.get("status"),
+                **({"search_mode": search_mode} if "search_mode" in body else {}),
+                **_smart_hybrid_queue_lanes(body, queued),
                 "mode": "text",
                 "query_type": "text_recall",
                 "branch": "kol_recall_profile_advance_pipeline",

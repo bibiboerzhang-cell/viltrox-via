@@ -1,6 +1,6 @@
 # 系统优化浏览器验收夹具（仅合成数据）
 
-直接渲染当前源码里的 `ActionInboxPanel`、`GtmKpiBand`、`SignalsBody`、`CampaignPlanReadiness` 和 `CampaignPlanPresentation`，复用现有 global/tokens/type-scale/theme-alias/ds-viz 样式。本目录的控制栏与假数据不是生产功能，也不是新的业务页面。
+直接渲染当前源码里的 `ActionInboxPanel`、`GtmKpiBand`、`SignalsBody`、`CampaignPlanReadiness`、`CampaignPlanPresentation`、`StaffProfileDrawer` 和 `KolProfileDrawer`，复用现有 global/tokens/type-scale/theme-alias/ds-viz 样式。本目录的控制栏与假数据不是生产功能，也不是新的业务页面。
 
 此夹具只能证明组件在指定合成输入下的显示与交互。截图、构建成功或假接口调用成功，均不证明上线、真实账号权限、平台连接、数据完整性、真实费用、订单归因或营销闭环。
 
@@ -45,10 +45,13 @@ node node_modules/vite/bin/vite.js preview --config tests/browser/system-optimiz
 | 读取失败暂停 | 打开人工对账，填原因和任意合成证据；点夹具“模拟读取失败”，再点组件刷新 | 保留旧记录，显示操作暂停，已打开表单的提交按钮不可用；“恢复读取”后需手动刷新 |
 | 计划缺证据 | 选择场景 | 显示合成缺口与下一步；`executable=false`、未请求批准，不声称项目已创建或可执行 |
 | 规划草案结构化审阅 | 选择 `plan_review`，按需展开原始 JSON | 真实准备检查与规划展示全宽呈现；合成预算 1,000.01、分配合计 750.01、未分配 250.00，币种不推断；模型费用未知，逐人理由缺失如实提示，没有执行/批准按钮 |
+| KPI 与消息证据待核 | 选择 `kpi_truth`，滚动抽屉内的证据列表；点击“切换合成工作量为已核实 0” | 工作量 `null` 显示待核验，不能退回旧 `kpi_credit=987654`；来源/分组/汇总的 `null` 保持待核验，合成真 0 显示 0；手工 inbound 消息必须显示“对方回复（手工记录）”“收发未核验” |
 
 每次切换或“重置合成场景”会重建合成内存状态并重新挂载行动组件。这是验收夹具的重置动作，不代表生产中跨刷新持久化。KPI 的待办数仅来自合成 suggested 窗口，不代表所有已批准/运行中任务。
 
 `plan_review` 独立显示完整合成规划，不同时挂载 KPI、信号和行动收件箱；不触发行动假接口。原始 JSON 默认折叠，结构化摘要、预算、节奏、候选和依据风险不折叠。固定 1440×1400 截图从页顶开始保留合成标识，runner 检查关键预算块完整位于视口；较下方的依据风险、JSON 详情和隔离回执可能需要滚动。移动宽度的可读性仍须人工核验，不由桌面截图推定。
+
+`kpi_truth` 是一个场景，内含工作量未知 → 真实 0 的两步合成对照。不挂载行动收件箱，不传 KOL token（不启用 TwinCard 查询），不提供头像或外链。真实抽屉只接收合成 props；生产样式仅在此场景挂载，夹具作用域把固定抽屉并排放置，保留独立内容滚动。关闭按钮固定留在当前夹具，不作为关闭行为验收。切换场景或重置会回到 `workload_score=null`。两张截图均保留页顶合成标识：未知工作量与手工消息、零工作量与 KOL KPI 四行证据；这不是生产抽屉定位/完整响应式的验收。
 
 验收建议记录：源码 SHA/dirty 状态、所选场景、窗口尺寸、操作步骤、实际显示、是否通过、Console/Network 是否出现非预期请求。截图必须保留页顶“合成数据”标识；不得作为线上已发布证据。
 
@@ -70,6 +73,6 @@ node frontend/tests/browser/system-optimization/run-browser-regression.mjs --run
 
 runner 复用仓库 CDP pipe 与 deadline 实现，只启动自己的临时 headless Chrome/profile（不连接用户浏览器），不注入任何真实认证。固定总期限 120 秒，通过 DOM 选择场景、点击按钮、填写合成对账原因，并且仅确认带“合成数据夹具”前缀的弹窗。检查实际矩形、visibility 和 opacity，禁用按钮的正常半透明仍算可见。
 
-页面请求只允许 4178 的根文档及构建静态资源，其他请求在发送前拒绝。回执包含 10 场景的 DOM、普通 Console/Network 记录和 4 张保留合成标识的截图：原有 `01-source-failure`、`06-queue-not-completion`、`08-read-failure-pauses-form`，另加 `10-plan-review-presentation`。文件保存在运行时打印的 `/private/tmp/vkpi-synthetic-browser-*` 下。无 `--run` 时只显示用法。
+页面请求只允许 4178 的根文档及构建静态资源，其他请求在发送前拒绝。回执包含原有 10 场景加 `kpi_truth`（共 11 场景）的 DOM、普通 Console/Network 记录和 6 张保留合成标识的截图：原有 `01-source-failure`、`06-queue-not-completion`、`08-read-failure-pauses-form`、`10-plan-review-presentation`，新增 `11-kpi-truth-unknown` 与 `11-kpi-truth`。新增场景先检查工作量待核且旧积分不出现，逐条检查 Staff 来源/分组、KOL 来源/汇总的 null/0，再检查手工消息可见；切换 0 后检查工作量为 0 且 KOL KPI 四行全部位于截图范围。该场景要求连假行动接口调用也为 0。文件保存在运行时打印的 `/private/tmp/vkpi-synthetic-browser-*` 下。无 `--run` 时只显示用法。
 
 完成或失败后只终止 runner 自己启动的 Chrome，保留精确 profile/回执/截图路径。4178 预览仍由原启动者负责停止。此结果属于合成浏览器功能验收，不是生产发布或真实业务验收。

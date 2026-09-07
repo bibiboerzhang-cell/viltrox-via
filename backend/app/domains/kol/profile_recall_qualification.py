@@ -48,6 +48,7 @@ from app.domains.kol.profile_recall_gate_policy import (
     normalized_excluded_identities,
 )
 from app.domains.kol import search_relaxation as _relax
+from app.domains.kol.audience_evidence import resolve_audience_evidence
 
 
 SMART_LOCAL_TARGET = 30
@@ -106,6 +107,7 @@ def smart_local_policy(
     profile_types: Any = None,
     gate_mode: Any = _relax.DEFAULT_MODE,
     hide_team_favorites: Any = None,
+    geo_constraints: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the Smart-local policy for one search mode.
 
@@ -142,6 +144,7 @@ def smart_local_policy(
         _relax.POLICY_KEY: mode,
         _relax.HIDE_FAVORITES_POLICY_KEY: hide_favorites,
         "market": normalized_market,
+        "geo_constraints": dict(geo_constraints or {}),
         "platforms": normalized_platforms,
         "languages": list(filter_spec["languages"]["values"]),
         "profile_types": list(filter_spec["profile_types"]["values"]),
@@ -353,7 +356,7 @@ def _strong_market_inference(raw_platform_data: Any) -> dict[str, Any]:
     return {}
 
 
-def _market_resolution(row: dict[str, Any]) -> dict[str, Any]:
+def _market_resolution(row: dict[str, Any], *, allow_audience: bool = True) -> dict[str, Any]:
     """Resolve a hard-gate market value with explicit provenance."""
     raw = _json_dict(row.get("raw_platform_data"))
     explicit_market = _normalize_market(row.get("country"))
@@ -383,7 +386,7 @@ def _market_resolution(row: dict[str, Any]) -> dict[str, Any]:
     declared = _declared_market_annotation(raw)
     if declared:
         return declared
-    audience = _strong_market_inference(raw)
+    audience = _strong_market_inference(raw) if allow_audience else {}
     if audience:
         return audience
     untrusted_source = rejected_source or inferred_source
@@ -397,6 +400,24 @@ def _market_resolution(row: dict[str, Any]) -> dict[str, Any]:
             untrusted_source and _forbidden_market_source(untrusted_source)
         ),
     }
+
+
+def _audience_resolution(row: dict[str, Any], *, as_of: datetime | None = None,
+                         evidence_resolver: Any = None) -> dict[str, Any]:
+    """Only separately verified audience evidence can satisfy an audience gate.
+
+    Creator country and public-text/model inference are never audience facts.
+    Unknown evidence is retained as pending by the online qualification layer.
+    Canonical matching binds a record; it does not authenticate provider identity.
+    """
+    # Do not let raw annotations, display names or a pool id define the subject.
+    identity_fields = ("platform", "handle", "profile_url", "channel_id", "channelId",
+                       "account_id", "accountId", "platform_user_id", "platformUserId",
+                       "user_id", "userId", "native_id", "nativeId")
+    identity = {key: row[key] for key in identity_fields if key in row}
+    subject = _shared_creator_key(identity) if row.get("identity_projection_passed") is not False else None
+    return resolve_audience_evidence(row.get("raw_platform_data"), as_of=as_of,
+                                     evidence_resolver=evidence_resolver, expected_subject_key=subject)
 
 
 def _account_quality_verdict(item: dict[str, Any], row: dict[str, Any]) -> str:
@@ -482,6 +503,7 @@ def qualify_local_candidates(
     excluded_identity_reason: str = "duplicate_canonical_identity",
     excluded_identity_aliases: set[str] | None = None,
     identity_aliases_fn: Any = None,
+    audience_evidence_resolver: Any = None,
 ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], dict[str, Any]]:
     """Gate before limit, then soft-fill unused type quota from the other bucket."""
     started = perf_counter()
@@ -520,6 +542,10 @@ def qualify_local_candidates(
             account_quality_verdict=_account_quality_verdict,
             market_resolution=_market_resolution,
             identity_aliases=identity_aliases_fn if callable(identity_aliases_fn) else None,
+            creator_country_resolution=lambda row: _market_resolution(row, allow_audience=False),
+            audience_market_resolution=lambda row: _audience_resolution(
+                row, as_of=now, evidence_resolver=audience_evidence_resolver,
+            ),
         ),
         legacy_minimum_followers=SMART_LOCAL_MIN_FOLLOWERS,
     )

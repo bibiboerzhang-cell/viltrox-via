@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.shared import vkpi_kpi_evidence_enrichment
+from app.shared.vkpi_kpi_communication_truth import project_kpi_source_row
 
 logger = get_logger(__name__)
 
@@ -63,7 +64,8 @@ def enrich_kpi_source_row(conn: Any, source_row: dict[str, Any]) -> dict[str, An
     """Attach source_context to one KPI ledger row.
 
     The ledger remains append-only; this only resolves human-readable context for
-    staff/KOL evidence drawers and does not change metric values.
+    staff/KOL evidence drawers. Communication-dependent values are projected as
+    unknown with their original values retained for audit; stored rows are unchanged.
     """
     row = dict(source_row)
     metadata = _parse_json(row.get("metadata_json") or row.get("metadata"))
@@ -88,4 +90,4 @@ def enrich_kpi_source_row(conn: Any, source_row: dict[str, Any]) -> dict[str, An
     context["entity_count"] = len(entities)
     row["metadata"] = metadata
     row["source_context"] = context
-    return row
+    return project_kpi_source_row(row)

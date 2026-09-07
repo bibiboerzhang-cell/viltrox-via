@@ -402,8 +402,6 @@ EXPECTED_QUERY_ORDER = [
     "recommendation_rejected",
     "recommendation_claimed",
     "recommendation_project_created",
-    "recommendation_outreach_sent",
-    "recommendation_reply_received",
     "recommendation_agreement_reached",
     "recommendation_content_published",
     "recommendation_order_attributed",
@@ -424,18 +422,25 @@ def test_daily_rollup_freezes_scope_date_metrics_money_and_return_order(
         actor_staff=actor,
     )
 
-    assert _digest(result) == "d01497ccce590acc7447eda5b13777525cd5584e3dbc67b870368d966558920a"
+    assert _digest(result) == "8adbebbed9806af527883a57c832df406ea8d56331a4942ba2f35a9b932201c2"
     assert list(result) == [
         "ledger_date",
         "staff_id",
         "inserted",
         "updated",
+        "skipped_unverified",
         "total_entries",
         "metric_counts",
         "workload_weights",
     ]
     assert result["ledger_date"] == "2026-08-29"
     assert result["staff_id"] == 7
+    assert (result["inserted"], result["updated"], result["total_entries"]) == (29, 1, 29)
+    assert result["skipped_unverified"] == 0
+    assert not {"recommendation_outreach_sent", "recommendation_reply_received"}.intersection(result["metric_counts"])
+    workload = next(row for row in harness.store.values() if row["metric_key"] == "workload_score")
+    assert workload["metric_value"] == 35.56  # Previous 37.56 included an unverified reply's two points.
+    assert "recommendation_reply_received" not in {item["metric_key"] for item in workload["metadata"]["components"]}
     assert [label for label, _sql, _params in harness.queries] == EXPECTED_QUERY_ORDER
     assert all(params == ("2026-08-29", 7) for _label, _sql, params in harness.queries)
     assert harness.events[-3:] == [
@@ -495,8 +500,8 @@ def test_daily_rollup_rerun_updates_stable_sources_without_double_counting(
         actor_staff=actor,
     )
 
-    assert _digest(first) == "d01497ccce590acc7447eda5b13777525cd5584e3dbc67b870368d966558920a"
-    assert _digest(second) == "0e3e11501e4372eeb9ecc6f3736d37cd4d826d838c8b6b127360686a875d5398"
+    assert _digest(first) == "8adbebbed9806af527883a57c832df406ea8d56331a4942ba2f35a9b932201c2"
+    assert _digest(second) == "e2e6fbe7a916547014c46b01ed46eed3d5259bcaa42f267565be2e7ec2a6f8db"
     assert len(harness.store) == unique_after_first
     assert second["inserted"] == 0
     assert second["updated"] > 0
@@ -576,6 +581,7 @@ def test_daily_rollup_empty_unscoped_run_keeps_all_staff_scope_and_zero_result(
         "staff_id": None,
         "inserted": 0,
         "updated": 0,
+        "skipped_unverified": 0,
         "total_entries": 0,
         "metric_counts": {},
         "workload_weights": kpi_ledger.WORKLOAD_WEIGHTS,

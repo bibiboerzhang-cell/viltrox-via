@@ -23,6 +23,8 @@ def prepare_project(
     stage = normalize_stage(str(body.get("stage") or "discovery"))
     if stage not in project_stages:
         raise ValueError("unsupported stage")
+    from app.domains.projects.shipment_write_guard import reject_dispatched_creation
+    reject_dispatched_creation({**body, "stage": stage})
     actor_staff_id = staff_id(staff)
     assigned_staff_id = to_int(body.get("assigned_staff_id"), actor_staff_id)
     if not can_view_all(staff):

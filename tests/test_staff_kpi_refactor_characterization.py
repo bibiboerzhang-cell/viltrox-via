@@ -103,7 +103,8 @@ def test_staff_kpi_refactor_preserves_query_order_financial_truth_and_ledger_ove
     assert row["kol_claims"] == 2
     assert row["projects"] == 1
     assert row["active_projects"] == 1
-    assert row["replied"] == 3
+    assert row["replied"] is None
+    assert row["recorded_stage_counts"] == {"contacted": 0, "replied": 3}
     assert row["links_created"] == 4
     assert row["valid_clicks"] == 12
     assert row["bot_clicks"] == 2
@@ -120,7 +121,18 @@ def test_staff_kpi_refactor_preserves_query_order_financial_truth_and_ledger_ove
         "cost": "real",
         "net_contribution": "real",
         "roi": "real",
+        "workload_score": "unknown",
+        "kpi_credit": "unknown",
+        "contacted": "unknown",
+        "replied": "unknown",
     }
     assert row["legacy_workload_score"] == 10
-    assert row["workload_score"] == 9.5
+    assert row["workload_score"] is None
+    assert row["ledger_workload_score"] is None
+    assert row["kpi_credit"] is None
+    assert row["recorded_ledger_workload_score"] == 9.5
+    assert row["recorded_kpi_credit"] == 3
+    assert row["operational_workload_score"] == 4
+    assert result["legacy_kpi_formula"] == {"contacted": 1, "replied": 2}
+    assert "contacted" not in result["kpi_formula"] and "replied" not in result["kpi_formula"]
     assert row["recommendation_source_rows"] == 4

@@ -180,16 +180,12 @@ def test_all_three_platforms_is_reported_as_no_platform_filter():
 
 # ── 2. 语言默认「包含未知」───────────────────────────────────────────────────
 
-def test_language_defaults_to_include_unknown_even_when_operator_named_it():
-    """语言这一刀要特别克制:池里 1450/2036(71.2%)的人 language 是空的。
-
-    操作员点名的语言**取值**一个都不丢(仍是 explicit / locked),但**模式**默认
-    「包含未知」—— 已知语言对不上的排除,没填的保留。按「必须匹配」筛只剩个位数。
-    """
+def test_operator_named_language_requires_verified_match():
+    """明确点名的语言不能因库存缺值而静默改为「包含未知」。"""
     facet = _propose("找说英语的美国摄影师")["facets"]["languages"]
     assert facet["values"] == ["en"]
     assert facet["origin"] == facets.ORIGIN_EXPLICIT
-    assert facet["mode"] == facets.LANGUAGE_DEFAULT_MODE == "include_unknown"
+    assert facet["mode"] == facets.LANGUAGE_EXPLICIT_MODE == "require"
     assert facet["relaxable"] is False
 
 
@@ -264,8 +260,8 @@ def test_operator_facing_text_carries_no_internal_jargon_or_vendor_names():
 def test_filters_block_only_uses_supported_recall_filter_keys():
     proposal = _propose("找说英语的美国人像摄影师,粉丝多的,在 youtube")
     assert set(proposal["filters"]) <= set(SUPPORTED_RECALL_FILTERS)
-    # 三态项按既有形态出:{"values": [...], "mode": ...}
-    assert proposal["filters"]["languages"] == {"values": ["en"], "mode": "include_unknown"}
+    # require 沿用紧凑列表;非 require 三态模式才带 values/mode 对象。
+    assert proposal["filters"]["languages"] == ["en"]
     assert proposal["filters"]["countries"] == ["US"]
 
 

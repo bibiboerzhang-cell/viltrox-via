@@ -10,11 +10,17 @@ repeat a query, so this path cannot collapse back into a broad merged query.
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.domains.kol.identity import canonical_creator_aliases
+from app.domains.kol.profile_candidate_observations import merge_candidate_observations
 from app.domains.kol.targeted_search_contract import rebuild_locked_term_groups_for_cell
+from app.domains.kol.search_plan_semantics import (
+    query_cell_intent_fields, summarize_query_cell_coverage,
+    validate_query_cell_execution,
+)
 
 
 MAX_FIRST_ROUND_CELLS = 8
@@ -27,6 +33,16 @@ Preflight = Callable[[dict[str, Any]], dict[str, Any]]
 
 MAX_FALLBACK_QUERIES = 3
 TARGETED_CURSOR_SCHEMA = "targeted_query_cell_cursor_v1"
+_OPERATOR_SEGMENT_SOURCES = frozenset({
+    "operator_text", "operator_text_exact", "operator_filter",
+})
+_SEGMENT_SOURCES = _OPERATOR_SEGMENT_SOURCES | {
+    "legacy_existing_evidence", "planner_inferred", "rule_fallback",
+}
+_CELL_LIST_FIELDS = (
+    "platforms", "fallback_queries", "required_evidence_groups",
+    "required_scene_terms", "required_role_terms",
+)
 
 
 def _text(value: Any) -> str:
@@ -40,6 +56,35 @@ def _int(value: Any, default: int) -> int:
         return default
 
 
+def _segment_provenance(cell: dict[str, Any]) -> dict[str, Any]:
+    """Carry server-built intent provenance, not a new trust credential.
+
+    Session/queue inputs discard client plans and the worker rebuilds cells
+    from operator input. This projection must only receive those server plans;
+    a source label by itself cannot authenticate arbitrary client metadata.
+    Unknown labels and truthy strings never grant an operator lock.
+    """
+
+    raw_source = cell.get("segment_source")
+    source = raw_source if isinstance(raw_source, str) and raw_source in _SEGMENT_SOURCES else ""
+    return {
+        "segment_source": source,
+        "segment_locked": (
+            cell.get("segment_locked") is True
+            and source in _OPERATOR_SEGMENT_SOURCES | {"legacy_existing_evidence"}
+        ),
+    }
+
+
+def _valid_cell_lists(cell: dict[str, Any]) -> bool:
+    # A malformed required list must reject the cell, not erase a hard
+    # condition or turn a string into single-character evidence terms.
+    return all(
+        value is None or (isinstance(value, list) and all(isinstance(item, str) for item in value))
+        for value in (cell.get(field) for field in _CELL_LIST_FIELDS)
+    )
+
+
 def normalize_first_round_cells(value: Any) -> tuple[list[dict[str, Any]], int]:
     """Return bounded, executable round-one cells and the omitted count."""
 
@@ -48,12 +93,14 @@ def normalize_first_round_cells(value: Any) -> tuple[list[dict[str, Any]], int]:
     seen_ids: set[str] = set()
     seen_queries: set[str] = set()
     for raw in raw_cells:
-        if not isinstance(raw, dict) or _int(raw.get("round"), 1) != 1:
+        if not isinstance(raw, dict) or _int(raw.get("round"), 1) != 1 or not _valid_cell_lists(raw):
             continue
         query = _text(raw.get("primary_query"))[:500]
         cell_id = _text(raw.get("query_cell_id"))[:120]
         query_key = query.casefold()
-        if not query or not cell_id or cell_id in seen_ids or query_key in seen_queries:
+        if not query or not cell_id or cell_id in seen_ids:
+            continue
+        if query_key in seen_queries and "query_intent" not in raw:
             continue
         seen_ids.add(cell_id)
         seen_queries.add(query_key)
@@ -79,6 +126,8 @@ def normalize_first_round_cells(value: Any) -> tuple[list[dict[str, Any]], int]:
             "objective": _text(raw.get("objective"))[:80],
             "segment": _text(raw.get("segment"))[:120],
             "segment_label": _text(raw.get("segment_label"))[:240],
+            **_segment_provenance(raw),
+            **query_cell_intent_fields(raw),
             "primary_query": query,
             "fallback_queries": fallback_queries,
             "platforms": platforms,
@@ -130,6 +179,8 @@ def _cell_projection(
         "objective": cell.get("objective"),
         "segment": cell.get("segment"),
         "segment_label": cell.get("segment_label"),
+        **_segment_provenance(cell),
+        **_query_intent_execution_fields(cell, _text(executed_query) or cell["primary_query"]),
         "primary_query": cell["primary_query"],
         "executed_query": _text(executed_query) or cell["primary_query"],
         "round_no": max(1, int(round_no or 1)),
@@ -154,6 +205,14 @@ def _cell_projection(
     return projection
 
 
+def _query_intent_execution_fields(
+    cell: dict[str, Any], executed_query: str, validation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    verdict = validation if validation is not None else validate_query_cell_execution(cell, executed_query)
+    return {**query_cell_intent_fields(cell), "query_intent_validation": verdict,
+            "coverage_status": verdict["status"]}
+
+
 def _matched_cell_list(value: Any) -> list[dict[str, Any]]:
     """Only a JSON-list may carry candidate-to-cell provenance."""
 
@@ -163,7 +222,7 @@ def _matched_cell_list(value: Any) -> list[dict[str, Any]]:
 
 
 def _annotate_candidate(raw: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
-    item = dict(raw)
+    item = deepcopy(raw)
     cell = run["cell"]
     executed_query = run["query"]
     projection = _cell_projection(
@@ -188,20 +247,7 @@ def _annotate_candidate(raw: dict[str, Any], run: dict[str, Any]) -> dict[str, A
 
 
 def _merge_candidate(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(existing)
-    for key, value in incoming.items():
-        if merged.get(key) in (None, "", [], {}):
-            merged[key] = value
-    matches: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for source in (existing, incoming):
-        for raw in _matched_cell_list(source.get("matched_query_cells")):
-            cell_id = _text(raw.get("query_cell_id"))
-            if cell_id and cell_id not in seen:
-                seen.add(cell_id)
-                matches.append(dict(raw))
-    merged["matched_query_cells"] = matches
-    return merged
+    return merge_candidate_observations(existing, incoming)
 
 
 def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -365,6 +411,8 @@ def _blocked_result(plan: dict[str, Any], verdict: dict[str, Any]) -> dict[str, 
         "query_cell_runs": [
             {
                 "query_cell_id": run["query_cell_id"],
+                **_segment_provenance(run["cell"]),
+                **_query_intent_execution_fields(run["cell"], run["query"]),
                 "primary_query": run["primary_query"],
                 "executed_query": run["query"],
                 "query_variant": run["query_variant"],
@@ -474,6 +522,7 @@ async def execute_query_cell_round(
             return _blocked_result(plan, verdict)
 
     semaphore = asyncio.Semaphore(MAX_CELL_CONCURRENCY)
+    dispatched_queries: set[tuple[str, tuple[str, ...]]] = set()
 
     async def _run(run: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | BaseException]:
         kwargs = {
@@ -488,6 +537,22 @@ async def execute_query_cell_round(
             "page_cursors": None,
             "exact_query": True,
         }
+        # Validate the actual outbound query after all compatibility kwargs
+        # have been overwritten. A plan/JSON success is not execution proof.
+        validation = validate_query_cell_execution(run["cell"], kwargs["query_text"])
+        run["query_intent_validation"] = validation
+        if validation["execution_allowed"] is not True:
+            return run, {"status": "blocked", "provider_calls": False, "new_creators": [],
+                         "errors": [{"status": "blocked", "reason": "query_intent_invalid",
+                                     "issues": validation["issues"]}]}
+        # Suppress only the same actual query and platform scope. Comparison
+        # tokenization would erase quotes/search operators with real meaning.
+        execution_key = (_text(kwargs["query_text"]).casefold(), tuple(sorted(run["platforms"])))
+        if "query_intent" in run["cell"] and execution_key in dispatched_queries:
+            validation.update(status="partial", execution_allowed=False, issues=["duplicate_provider_query_not_executed"])
+            return run, {"status": "not_executed_duplicate_query", "provider_calls": False, "new_creators": [],
+                         "errors": [{"status": "not_executed_duplicate_query", "reason": "duplicate_provider_query_not_executed"}]}
+        dispatched_queries.add(execution_key)
         try:
             async with semaphore:
                 result = await discover(**kwargs)
@@ -513,6 +578,8 @@ async def execute_query_cell_round(
             })
             run_summaries.append({
                 "query_cell_id": cell["query_cell_id"],
+                **_segment_provenance(cell),
+                **_query_intent_execution_fields(cell, run["query"], run.get("query_intent_validation")),
                 "primary_query": run["primary_query"],
                 "executed_query": run["query"],
                 "query_variant": run["query_variant"],
@@ -562,6 +629,8 @@ async def execute_query_cell_round(
         run_summaries.append({
             "query_cell_id": cell["query_cell_id"],
             "segment": cell.get("segment"),
+            **_segment_provenance(cell),
+            **_query_intent_execution_fields(cell, run["query"], run.get("query_intent_validation")),
             "primary_query": run["primary_query"],
             "executed_query": run["query"],
             "query_variant": run["query_variant"],
@@ -590,6 +659,7 @@ async def execute_query_cell_round(
         status = "failed"
     else:
         status = "empty"
+    coverage = summarize_query_cell_coverage(cells, run_summaries, omitted_count=omitted_count)
     return {
         "status": status,
         "query": run_summaries[0]["executed_query"],
@@ -606,8 +676,9 @@ async def execute_query_cell_round(
         "next_cursor": dict(plan["next_cursor"]),
         "next_page_cursors": {},
         "query_cell_runs": run_summaries,
+        "query_cell_coverage": coverage,
         "query_cells_requested": len(cells) + omitted_count,
-        "query_cells_executed": len(run_summaries),
+        "query_cells_executed": coverage["query_cells_executed"],
         "query_cells_omitted": omitted_count,
         "raw_candidate_occurrences": len(candidates),
         "unique_candidate_count": len(deduped),

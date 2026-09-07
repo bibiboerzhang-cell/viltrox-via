@@ -166,6 +166,67 @@ describe("useSmartKolSessionPolling", () => {
     expect(options.applyPolledSession).not.toHaveBeenCalled();
   });
 
+  it("持续网络失败达到截止时间后暂停同步,不永久自动重试", async () => {
+    getSession.mockRejectedValue(new Error("离线"));
+    const options = makeOptions();
+    render(<PollingHarness options={options} />);
+    await flush();
+    await advance(12 * 60 * 1000 + 1);
+    expect(options.setPollingSearchSessionId).toHaveBeenCalledWith(null);
+    expect(options.setPollPausedSessionId).toHaveBeenCalledWith(4242);
+    expect(options.setSessionPollNotice).toHaveBeenCalledWith(expect.stringContaining("继续同步"));
+    const calls = getSession.mock.calls.length;
+    await advance(60_000);
+    expect(getSession).toHaveBeenCalledTimes(calls);
+  });
+
+  it("挂起的GET也受观察截止约束,迟到响应不覆盖已暂停视图", async () => {
+    let settle!: (value: ReturnType<typeof runningSession>) => void;
+    getSession.mockImplementation(() => new Promise((resolve) => { settle = resolve; }));
+    const options = makeOptions();
+    render(<PollingHarness options={options} />);
+    await flush();
+    await advance(12 * 60 * 1000 + 1);
+    expect(options.setPollingSearchSessionId).toHaveBeenCalledWith(null);
+    expect(options.setPollPausedSessionId).toHaveBeenCalledWith(4242);
+    await act(async () => { settle(runningSession(4)); });
+    expect(options.applyPolledSession).not.toHaveBeenCalled();
+    expect(getSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("网络失败退避且保留上次结果,恢复同步仍只读取原会话", async () => {
+    getSession.mockResolvedValueOnce(runningSession(3)).mockRejectedValue(new Error("离线"));
+    const options = makeOptions();
+    const view = render(<PollingHarness options={options} />);
+    await flush();
+    await advance(2500);
+    await advance(2500);
+    expect(getSession).toHaveBeenCalledTimes(3);
+    await advance(2500);
+    expect(getSession).toHaveBeenCalledTimes(3);
+    expect(options.applyPolledSession).toHaveBeenCalledTimes(1);
+    await advance(12 * 60 * 1000);
+    expect(options.setPollPausedSessionId).toHaveBeenCalledWith(4242);
+    view.rerender(<PollingHarness options={{ ...options, pollingSearchSessionId: null }} />);
+    getSession.mockResolvedValue(runningSession(4));
+    view.rerender(<PollingHarness options={options} />);
+    await flush();
+    expect(getSession).toHaveBeenLastCalledWith("tok", 4242);
+    expect(options.applyPolledSession).toHaveBeenLastCalledWith(runningSession(4));
+  });
+
+  it.each(["partial", "ready", "failed", "cancelled"])("已结束%s会话不会因观察超时变成待重跑", async (status) => {
+    const terminal = { ...runningSession(0), status, result_summary: {} };
+    getSession.mockResolvedValueOnce(terminal).mockRejectedValue(new Error("之后离线"));
+    const options = makeOptions();
+    render(<PollingHarness options={options} />);
+    await flush();
+    await advance(12 * 60 * 1000 + 1);
+    expect(options.setPollingSearchSessionId).toHaveBeenCalledWith(null);
+    expect(options.setPollPausedSessionId).toHaveBeenCalledWith(null);
+    expect(options.setSessionPollNotice).toHaveBeenCalledWith(expect.stringContaining("结果已更新"));
+  });
+
   it("页面不可见时既不发请求也不空转,回前台立刻补一拍", async () => {
     getSession.mockImplementation(async () => JSON.parse(JSON.stringify(runningSession(3))));
     const options = makeOptions();

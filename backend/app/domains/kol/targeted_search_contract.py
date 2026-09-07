@@ -29,6 +29,12 @@ from app.domains.kol.targeted_search_capability import (
     prospective_lens_capability as _prospective_lens_capability,
 )
 from app.domains.kol.search_intent_text import affirmative_search_text
+from app.domains.kol.search_plan_semantics import (
+    build_query_cell_intent,
+    operator_query_angles,
+    preserve_operator_query_angles,
+    validate_query_cell_execution,
+)
 from app.domains.kol.targeted_search_filters import (
     DEFAULT_OBJECTIVE,
     EXISTING_EVIDENCE,
@@ -288,6 +294,18 @@ def _without_brand_model(value: Any, product: Any, *, drop_focal: bool = False) 
     return _text(" ".join(kept))
 
 
+def _with_query_intents(cells: list[dict[str, Any]], query: Any) -> list[dict[str, Any]]:
+    """Add a versioned contract; never assign a multi-cell format by guessing."""
+    angles = operator_query_angles(query)
+    angle_scope = "cell" if len(cells) == 1 else "unresolved"
+    for cell in cells:
+        if angles and angle_scope == "cell":
+            cell["primary_query"] = preserve_operator_query_angles(cell["primary_query"], angles)
+            cell["fallback_queries"] = [preserve_operator_query_angles(value, angles) for value in cell["fallback_queries"]]
+        cell["query_intent"] = build_query_cell_intent(cell, operator_query=query, angle_scope=angle_scope)
+    return cells
+
+
 def build_query_cells(
     *,
     query: Any,
@@ -323,7 +341,7 @@ def build_query_cells(
     if objective == EXISTING_EVIDENCE and not explicit and legacy:
         selected_legacy = legacy[:4]
         raw_limit = _first_round_raw_limit(body, cell_count=len(selected_legacy))
-        return [
+        return _with_query_intents([
             _cell(
                 index=index,
                 key=f"existing_{index}",
@@ -341,7 +359,7 @@ def build_query_cells(
                 product_evidence_basis=product_evidence_basis,
             )
             for index, query_value in enumerate(selected_legacy, start=1)
-        ]
+        ], query)
 
     seeds = explicit
     if not seeds:
@@ -447,7 +465,7 @@ def build_query_cells(
             role_terms=segment.get("required_role_terms") or (),
             role_only=segment.get("role_only") is True,
         ))
-    return cells
+    return _with_query_intents(cells, query)
 
 
 def apply_targeted_contract(
@@ -554,6 +572,32 @@ def apply_targeted_contract(
         "authoritative_query_field": "query_cells",
         "query_cells": cells,
     }
+    if cells:
+        from app.domains.kol.search_plan_semantics import assess_search_plan_semantics
+
+        review = assess_search_plan_semantics(
+            {
+                "queries": [cell["primary_query"] for cell in cells],
+                "platform": effective_platforms[0] if len(effective_platforms) == 1 else None,
+                "market": None,  # Market authority is the operator spec, never model prose.
+            },
+            branch_metadata=[{"scene": cell.get("segment", "")} for cell in cells],
+        )
+        output["query_plan_semantics"] = {
+            key: value for key, value in review.items() if key != "original_plan"
+        }
+        output["query_plan_semantics"]["query_cell_contracts"] = [
+            {"query_cell_id": cell["query_cell_id"],
+             "validation": validate_query_cell_execution(cell, cell["primary_query"])}
+            for cell in cells
+        ]
+        statuses = [row["validation"]["status"] for row in output["query_plan_semantics"]["query_cell_contracts"]]
+        if "invalid" in statuses:
+            output["query_plan_semantics"]["status"] = "invalid"
+        elif "partial" in statuses and output["query_plan_semantics"]["status"] != "invalid":
+            output["query_plan_semantics"]["status"] = "needs_review"
+        output["query_plan_semantics"]["candidate_qualification"] = "not_evaluated"
+        output["search_brief"]["query_plan_semantics"] = output["query_plan_semantics"]
     return output
 
 

@@ -16,6 +16,9 @@ from app.domains import audit, business_truth
 from app.domains.access import scope
 from app.domains.staff import kpi_rollup as _rollup_runtime
 from app.shared.vkpi_kpi_evidence import enrich_kpi_source_row
+from app.shared.vkpi_kpi_communication_truth import (
+    DERIVED_SCORE_METRICS, KPI_LABEL_SEMANTICS, KPI_OPERATIONAL_WEIGHTS, kpi_score_eligibility, project_kpi_source_row,
+)
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
@@ -23,8 +26,6 @@ logger = get_logger(__name__)
 
 
 STAGE_WEIGHTS: dict[str, float] = {
-    "contacted": 1,
-    "replied": 2,
     "agreed": 4,
     "shipped": 3,
     "received": 1,
@@ -34,27 +35,13 @@ STAGE_WEIGHTS: dict[str, float] = {
     "closed": 1,
 }
 
-WORKLOAD_WEIGHTS: dict[str, float] = {
-    "new_kol": 2,
-    "project_created": 1,
-    "link_created": 1,
-    "published_content": 5,
-    "valid_clicks": 0.02,
-    "recommendation_shortlisted": 0.5,
-    "recommendation_claimed": 1,
-    "recommendation_project_created": 2,
-    "recommendation_reply_received": 2,
-    "recommendation_agreement_reached": 4,
-    "recommendation_content_published": 5,
-    "recommendation_order_attributed": 5,
-    **{f"stage_{stage}": weight for stage, weight in STAGE_WEIGHTS.items()},
-}
+WORKLOAD_WEIGHTS: dict[str, float] = dict(KPI_OPERATIONAL_WEIGHTS)
 
 METRIC_LABELS: dict[str, str] = {
     "new_kol": "新增 KOL",
     "project_created": "创建项目",
-    "stage_contacted": "已联系",
-    "stage_replied": "已回复",
+    "stage_contacted": "手工联系阶段记录（收发未核验）",
+    "stage_replied": "手工回复阶段记录（收发未核验）",
     "stage_agreed": "已合作",
     "stage_shipped": "已发货",
     "stage_received": "已到货",
@@ -70,8 +57,8 @@ METRIC_LABELS: dict[str, str] = {
     "recommendation_rejected": "推荐拒绝",
     "recommendation_claimed": "推荐认领",
     "recommendation_project_created": "推荐建项",
-    "recommendation_outreach_sent": "推荐触达",
-    "recommendation_reply_received": "推荐回复",
+    "recommendation_outreach_sent": "推荐触达记录（收发未核验）",
+    "recommendation_reply_received": "推荐回复记录（收发未核验）",
     "recommendation_agreement_reached": "推荐合作",
     "recommendation_content_published": "推荐发布",
     "recommendation_order_attributed": "推荐出单",
@@ -171,13 +158,18 @@ def _upsert_entry(
     metadata: dict[str, Any] | None = None,
     now: str | None = None,
 ) -> str:
+    candidate = {"metric_key": metric_key, "metric_value": metric_value, "metadata": metadata}
+    if not kpi_score_eligibility(candidate):
+        return "skipped_unverified"
     now = now or utcnow()
     existing = conn.execute(
-        "SELECT id FROM vkpi_kpi_ledger WHERE ledger_date=? AND metric_key=? AND source_ref=?",
+        "SELECT * FROM vkpi_kpi_ledger WHERE ledger_date=? AND metric_key=? AND source_ref=?",
         (ledger_date, metric_key, source_ref),
     ).fetchone()
     payload = _json(metadata or {})
     if existing:
+        if metric_key in DERIVED_SCORE_METRICS and not kpi_score_eligibility(dict(existing)):
+            return "skipped_unverified"  # Preserve historical points; never silently debit a rerun.
         conn.execute(
             """
             UPDATE vkpi_kpi_ledger
@@ -272,8 +264,9 @@ def list_entries(limit: int = 100, staff_id: int | None = None, *, staff: dict[s
         item["metadata"] = _parse_json(item.get("metadata_json"))
         item = enrich_kpi_source_row(get_conn(), item)
         item["metric_label"] = METRIC_LABELS.get(str(item.get("metric_key") or ""), str(item.get("metric_key") or ""))
-        entries.append(item)
-    return {"entries": entries, "metric_labels": METRIC_LABELS, "workload_weights": WORKLOAD_WEIGHTS}
+        entries.append(project_kpi_source_row(item))
+    return {"entries": entries, "metric_labels": METRIC_LABELS, "workload_weights": WORKLOAD_WEIGHTS,
+            "label_semantics": KPI_LABEL_SEMANTICS}
 
 
 def _rollup_dependencies() -> _rollup_runtime.RollupDependencies:

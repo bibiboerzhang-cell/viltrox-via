@@ -368,17 +368,17 @@ _POOL_ACTION_FEEDBACK = {
     "reject": "reject",
     "snooze": "snooze",
     "unfavorite": "snooze",       # un-starring is a mild negative signal
-    "contact": "contact",         # 联系/触达 = 已外联信号(outreach_sent)
+    "contact": "contact",         # Operator preference only, not a delivery receipt.
     "touch": "contact",
     "outreach": "contact",
 }
 
-# pool 动作 → outcome 节点(W-L2:动作同步写 outcomes;snooze/unfavorite 无对应列不映射)。
+# Operator actions may prove adoption/preferences, never message transport.
+# Contact feedback remains available without manufacturing sent/reply outcomes.
 _POOL_ACTION_OUTCOME_NODE = {
     "shortlist": "shortlisted",
     "claim": "claimed",
     "reject": "rejected",
-    "contact": "outreach_sent",
 }
 
 

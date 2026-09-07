@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from app.domains.kol.search_execution_observation import project_execution_observation
+
 from app.domains.kol.search_progress_projection import (
     FULL_ANALYSIS_ROLES,
     _aggregate_progress_state,
@@ -467,7 +469,7 @@ def project_search_progress(
         requested_tasks_terminal=requested_tasks_terminal,
     )
 
-    return _progress_contract_result(
+    return project_execution_observation(session, _progress_contract_result(
         session,
         summary,
         state=state,
@@ -483,7 +485,7 @@ def project_search_progress(
         blocked_by_worker=blocked_by_worker,
         full_analysis_flags=full_analysis_flags,
         observed_at=observed_at,
-    )
+    ))
 
 
 __all__ = [

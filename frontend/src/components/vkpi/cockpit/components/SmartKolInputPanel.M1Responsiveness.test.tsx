@@ -109,12 +109,21 @@ describe("M1 · 本地结果的可见性", () => {
 
   it("(b)(c) 本地结果一到手就报出可证明的人数,并立刻放开搜索按钮——哪怕后台补充还在跑", async () => {
     domainMocks.smartKolSearch.mockResolvedValue({
-      status: "ready", mode: "text", query_type: "text_recall",
-      search_session: { id: 701 }, result: recallWith(["alpha", "bravo", "charlie"]),
+      status: "queued", mode: "text", query_type: "text_recall", branch: "kol_recall_profile_advance_pipeline",
+      search_session: { id: 701, status: "running", query_type: "text_recall", items: [] },
     });
-    // 后台全网补充腿挂住不回:这正是线上那 20-25 秒。
-    const advance = deferred<any>();
-    domainMocks.smartKolSearchProfileAdvanceJob.mockReturnValue(advance.promise);
+    // One queue submission; the GET snapshot independently delivers local rows
+    // while the online lane remains running.
+    domainMocks.getKolSearchSession.mockResolvedValue({
+      id: 701, status: "running", query_type: "text_recall",
+      result_summary: { search_lanes: {
+        local: { status: "ready", returned_count: 3 }, online: { status: "running", returned_count: null },
+      } },
+      items: recallWith(["alpha", "bravo", "charlie"]).items.map((row) => ({
+        id: row.kol_pool_id, item_type: "recall_candidate", kol_pool_id: row.kol_pool_id,
+        status: "matched", payload: row,
+      })),
+    });
 
     render(<SmartKolInputPanel apiToken="token" />);
     runSearch();
@@ -128,10 +137,9 @@ describe("M1 · 本地结果的可见性", () => {
     // 关键:后台腿还在飞,搜索按钮已经可用,用户可以马上发起下一次搜索。
     expect(screen.getByTestId("smart-kol-run")).not.toBeDisabled();
 
-    advance.resolve({ status: "queued" });
-    await waitFor(() => {
-      expect(screen.getByTestId("smart-kol-recall-ready").textContent).not.toContain("后台继续补充新发现");
-    });
+    expect(screen.getByTestId("smart-kol-online-lane")).toHaveTextContent("查找中");
+    expect(domainMocks.smartKolSearch).toHaveBeenCalledTimes(1);
+    expect(domainMocks.smartKolSearchProfileAdvanceJob).not.toHaveBeenCalled();
   });
 
   it("(b) 后台补充在飞时点搜索按钮,能真的再发起一次本地查找", async () => {

@@ -19,6 +19,11 @@ from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    # Pure shared projections do not import evidence/recommendation facades.
+    from app.shared.message_truth import project_message_record
+    from app.shared.communication_truth import project_outcome_communications
+    from app.shared.vkpi_kpi_communication_truth import project_kpi_source_row
+
     ensure_vkpi_schema()
     ensure_vkpi_product_industry_schema()
     claim_access.assert_kol_access(kol_id, staff, allow_unclaimed=False)
@@ -207,6 +212,7 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
         """,
         (int(kol_id), *kpi_scope_params),
     )
+    kpi_ledger = [project_kpi_source_row(item) for item in kpi_ledger]
     kpi_summary = profile_assembly.build_kpi_summary(kpi_ledger)
 
     recommendations = _rows_or_empty(
@@ -252,6 +258,7 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
         """,
         (int(kol_id), int(kol_id)),
     ) if is_manager else []
+    recommendation_outcomes = [project_outcome_communications(item) for item in recommendation_outcomes]
     audit_events: list[dict[str, Any]] = []
     if is_manager:
         audit_where, audit_params = profile_scope.audit_where_parts(
@@ -284,6 +291,7 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
         """,
         (int(kol_id), *message_scope_params),
     )
+    messages = [project_message_record(item) for item in messages]
     content_scope_sql, content_scope_params = project_scope_clause("cp.project_id")
     content_posts = _rows_or_empty(
         f"""

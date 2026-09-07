@@ -2,15 +2,14 @@
 
 红线:成员只能 request(请求发货);approve/reject 仅管理层(scope.can_view_all)。
 只写隔离表 vkpi_shipment_approvals,零触 vkpi_kol_pool / viltrox_fit_score / 业务发货状态。
-真正"卡住发货"由调用方在发货前查 is_approved();本模块只管审批状态机。
+实际新发货由调用方在同事务执行 assert_shippable()；展示查询不可代替写口门禁。
 """
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
+from app.db.connection import PostgresCompatConnection, get_conn, table_exists
 from app.domains.access import scope
 
 logger = get_logger(__name__)
@@ -20,11 +19,6 @@ _TABLE = "vkpi_shipment_approvals"
 
 class ShipmentNotApproved(ValueError):
     """发货前置审批未通过 —— 调用方(发货动作)应据此拦截,不得落库发货。"""
-
-
-def _strict_enabled() -> bool:
-    """严格模式:无任何审批记录也拦发货。默认 off(向后兼容,只拦"已请求未通过")。"""
-    return str(os.getenv("SHIPMENT_APPROVAL_STRICT", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def get_status(project_id: int, kol_pool_id: int) -> str | None:
@@ -42,24 +36,24 @@ def get_status(project_id: int, kol_pool_id: int) -> str | None:
         return None
 
 
-def assert_shippable(project_id: int, kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> None:
-    """发货前置门槛(调用方在落库发货前调用)。
-    - 已 approved → 放行;
-    - 已 pending/rejected(已发起审批但未通过)→ 拦截(人审真生效);
-    - 无审批记录 → 默认放行(向后兼容),strict 模式下拦截。
-    """
+def assert_shippable(project_id: int, kol_pool_id: int, *, staff: dict[str, Any] | None = None, conn: Any = None) -> None:
+    """New dispatch is fail-closed; caller holds this connection through its write."""
     del staff
     pid, kid = int(project_id or 0), int(kol_pool_id or 0)
     if pid <= 0 or kid <= 0:
-        return  # 无法定位 KOL → 不拦(向后兼容,避免误伤旧流程)
-    status = get_status(pid, kid)
-    if status == "approved":
-        return
-    if status in {"pending", "rejected"}:
-        raise ShipmentNotApproved(f"发货被拦截:审批状态={status}(需管理员通过发货审批后再发货)")
-    if _strict_enabled():
-        raise ShipmentNotApproved("发货被拦截:严格模式下需先申请并通过发货审批")
-    return
+        raise ShipmentNotApproved("shipment_approval_required:identity_missing")
+    try:
+        connection = conn if conn is not None else get_conn()
+        suffix = " FOR SHARE" if isinstance(connection, PostgresCompatConnection) else ""
+        row = connection.execute(
+            f"SELECT status, approved_by, approved_at FROM {_TABLE} WHERE project_id=? AND kol_pool_id=?{suffix}",
+            (pid, kid),
+        ).fetchone()
+    except Exception as exc:
+        raise ShipmentNotApproved("shipment_approval_required:verification_unavailable") from exc
+    approval = dict(row) if row else {}
+    if approval.get("status") != "approved" or not approval.get("approved_by") or not approval.get("approved_at"):
+        raise ShipmentNotApproved(f"shipment_approval_required:{approval.get('status') or 'missing'}")
 
 
 def _actor(staff: dict[str, Any] | None) -> int | None:
@@ -83,17 +77,21 @@ def request_approval(project_id: int, kol_pool_id: int, *, staff: dict[str, Any]
         return {"ok": False, "reason": "project_not_found", "project_id": pid}
     if conn.execute("SELECT 1 FROM vkpi_kol_pool WHERE id = ?", (kid,)).fetchone() is None:
         return {"ok": False, "reason": "kol_not_found", "kol_pool_id": kid}
-    conn.execute(
+    from app.domains.projects.shipment_write_guard import resolve_subject
+    scope.assert_project_access(pid, staff, write=True)
+    resolve_subject(conn, pid, kol_pool_id=kid)
+    receipt = conn.execute(
         f"""
         INSERT INTO {_TABLE} (project_id, kol_pool_id, status, requested_by, reason)
         VALUES (?, ?, 'pending', ?, ?)
         ON CONFLICT (project_id, kol_pool_id) DO UPDATE SET
             reason = EXCLUDED.reason, updated_at = NOW()
+        RETURNING status
         """,
         (pid, kid, _actor(staff), str(reason or "")[:500]),
-    )
+    ).fetchone()
     conn.commit()
-    return {"ok": True, "status": "pending", "project_id": pid, "kol_pool_id": kid}
+    return {"ok": True, "status": str(receipt["status"]), "project_id": pid, "kol_pool_id": kid}
 
 
 def _decide(project_id: int, kol_pool_id: int, to_status: str, staff: dict[str, Any] | None, reason: str) -> dict[str, Any]:
@@ -112,7 +110,10 @@ def _decide(project_id: int, kol_pool_id: int, to_status: str, staff: dict[str, 
         return {"ok": False, "reason": "project_not_found", "project_id": pid}
     if conn.execute("SELECT 1 FROM vkpi_kol_pool WHERE id = ?", (kid,)).fetchone() is None:
         return {"ok": False, "reason": "kol_not_found", "kol_pool_id": kid}
-    cur = conn.execute(
+    from app.domains.projects.shipment_write_guard import resolve_subject
+    scope.assert_project_access(pid, staff, write=True)
+    resolve_subject(conn, pid, kol_pool_id=kid)
+    conn.execute(
         f"""
         UPDATE {_TABLE}
         SET status = ?, approved_by = ?, approved_at = NOW(),
@@ -121,8 +122,9 @@ def _decide(project_id: int, kol_pool_id: int, to_status: str, staff: dict[str, 
         """,
         (to_status, _actor(staff), str(reason or ""), str(reason or ""), pid, kid),
     )
-    conn.commit()
-    if int(getattr(cur, "rowcount", 0) or 0) <= 0:
+    if conn.execute(
+        f"SELECT 1 FROM {_TABLE} WHERE project_id=? AND kol_pool_id=?", (pid, kid),
+    ).fetchone() is None:
         # 没有 pending 行 → 先建一条再置态(管理员可直接审批未请求的)。
         conn.execute(
             f"INSERT INTO {_TABLE} (project_id, kol_pool_id, status, approved_by, approved_at, reason) "
@@ -130,7 +132,7 @@ def _decide(project_id: int, kol_pool_id: int, to_status: str, staff: dict[str, 
             f"status=EXCLUDED.status, approved_by=EXCLUDED.approved_by, approved_at=NOW(), updated_at=NOW()",
             (pid, kid, to_status, _actor(staff), str(reason or "")),
         )
-        conn.commit()
+    conn.commit()
     return {"ok": True, "status": to_status, "project_id": pid, "kol_pool_id": kid}
 
 

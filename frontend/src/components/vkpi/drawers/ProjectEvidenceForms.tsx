@@ -83,14 +83,15 @@ export function ProjectEvidenceForms({
         } : undefined);
       }}>
         <h4>消息记录</h4>
+        <p className="vkpi-detail-subline">仅保存人工沟通记录，不会发送消息；记录方向或上传附件不代表收发已核验。</p>
         <div className="vkpi-form-grid">
           <label>来源<select value={messageForm.source} onChange={(event) => setMessageForm((current) => ({ ...current, source: event.target.value }))}><option value="manual">手动记录</option><option value="email">Email</option><option value="dm">DM</option><option value="comment">评论</option><option value="import">导入</option></select></label>
-          <label>方向<select value={messageForm.direction} onChange={(event) => setMessageForm((current) => ({ ...current, direction: event.target.value }))}><option value="outbound">我方发出</option><option value="inbound">红人回复</option></select></label>
+          <label>方向（人工记录）<select value={messageForm.direction} onChange={(event) => setMessageForm((current) => ({ ...current, direction: event.target.value }))}><option value="outbound">我方沟通（手工）</option><option value="inbound">对方回复（手工）</option></select></label>
         </div>
         <textarea value={messageForm.body} onChange={(event) => setMessageForm((current) => ({ ...current, body: event.target.value }))} placeholder="粘贴沟通要点，例如报价、回复、交付承诺。" />
         <input value={messageForm.evidenceUrl} onChange={(event) => setMessageForm((current) => ({ ...current, evidenceUrl: event.target.value }))} placeholder="证据链接 / 邮件链接 / 截图地址（可选）" />
         <label className="vkpi-upload-row">消息附件 / PDF / 截图<input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.xlsx,.xls,.txt,.doc,.docx" onChange={(event) => setMessageEvidenceFile(event.target.files?.[0] || null)} /></label>
-        <button className="vkpi-mini-button" type="submit" disabled={!onAddMessage || formBusy === 'message' || !messageForm.body.trim()}>{formBusy === 'message' ? '保存中...' : '保存消息'}</button>
+        <button className="vkpi-mini-button" type="submit" disabled={!onAddMessage || formBusy === 'message' || !messageForm.body.trim()}>{formBusy === 'message' ? '保存中...' : '保存沟通记录'}</button>
       </form>
       <form className="vkpi-form-stack" onSubmit={(event) => {
         event.preventDefault();

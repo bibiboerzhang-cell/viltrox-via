@@ -553,8 +553,8 @@ def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]
     return recorded
 
 
-def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
-    from app.domains.kol.search_sessions import record_items
+def attach_recall_result(session_id: int, result: dict[str, Any], *, lane_only: bool = False) -> dict[str, Any]:
+    from app.domains.kol.search_sessions import record_items, record_lane_items
 
     # Smart-local results may be attached by internal callers as well as the
     # HTTP/worker orchestration.  Re-apply its boundary projection here so raw
@@ -675,6 +675,9 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
         summary["local_qualification"] = local_qualification
     if pipeline_running:
         summary.update({"phase": "base", "progress": pipeline_progress})
+    if lane_only:
+        return record_lane_items(int(session_id), items, lane="local",
+                                 status="ready" if items else "empty", summary=summary)
     return record_items(
         int(session_id),
         items,
@@ -705,9 +708,9 @@ def _discovery_enrichment_payload(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+def attach_new_discovery_result(session_id: int, result: dict[str, Any], *, lane_only: bool = False) -> dict[str, Any]:
     """Attach platform-discovery candidates to an existing smart-search session."""
-    from app.domains.kol.search_sessions import get_session, record_items
+    from app.domains.kol.search_sessions import get_session, record_items, record_lane_items
 
     items: list[dict[str, Any]] = []
     rank = 1
@@ -799,10 +802,11 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
         rank += 1
 
     existing_summary: dict[str, Any] = {}
-    try:
-        existing_summary = _dict(get_session(int(session_id)).get("result_summary"))
-    except Exception:
-        existing_summary = {}
+    if not lane_only:
+        try:
+            existing_summary = _dict(get_session(int(session_id)).get("result_summary"))
+        except Exception:
+            existing_summary = {}
     pipeline_running = bool(result.get("_session_pipeline_running"))
     pipeline_progress = _dict(result.get("_session_progress"))
     discovery_summary = {
@@ -825,7 +829,8 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
     status = "running" if pipeline_running else "ready"
     if not pipeline_running and result.get("status") in {"partial", "failed"}:
         status = "partial"
-    recorded = record_items(int(session_id), items, status=status, summary=summary)
+    recorded = (record_lane_items(int(session_id), items, lane="online", status=_text(result.get("status")) or "ready", summary=summary)
+                if lane_only else record_items(int(session_id), items, status=status, summary=summary))
     recorded["new_discovery"] = discovery_summary
     return recorded
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Any
 
 from app.db.connection import get_conn
@@ -83,11 +84,11 @@ def _merge_provider_creator_observation(
     incoming_wins = _provider_handle_quality(
         incoming.get("handle"), platform
     ) > _provider_handle_quality(existing.get("handle"), platform)
-    winner = dict(incoming if incoming_wins else existing)
+    winner = deepcopy(incoming if incoming_wins else existing)
     other = existing if incoming_wins else incoming
     for key, value in other.items():
         if winner.get(key) in (None, "", [], {}):
-            winner[key] = value
+            winner[key] = deepcopy(value)
     winner["platform"] = platform
     return winner
 
@@ -98,7 +99,7 @@ def _canonicalize_provider_candidates(
     platform: str,
 ) -> list[dict[str, Any]]:
     """Fold UC-id/@handle/URL variants before any account-quality gate."""
-    pending = [{**raw, "platform": platform} for raw in items]
+    pending = [{**deepcopy(raw), "platform": platform} for raw in items]
     while True:
         output: list[dict[str, Any]] = []
         groups: list[tuple[set[str], int]] = []
@@ -389,6 +390,7 @@ async def discover_new_creators(
     exclude_chinese: bool = True,
     page_cursors: Any = None,
     exact_query: bool = False,
+    provider_discovery_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Search providers, gate candidates, and project the compatibility response.
 
@@ -412,6 +414,7 @@ async def discover_new_creators(
         exclude_chinese=exclude_chinese,
         page_cursors=page_cursors,
         exact_query=exact_query,
+        provider_discovery_policy=provider_discovery_policy,
         text_value=_text,
         int_value=_int,
         market_to_language=_market_to_language,

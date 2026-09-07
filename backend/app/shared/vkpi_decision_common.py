@@ -8,6 +8,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.domains import business_truth
 from app.shared.vkpi_kpi_evidence import enrich_kpi_source_row
+from app.shared.vkpi_kpi_communication_truth import project_kpi_metric_summary
 
 logger = get_logger(__name__)
 
@@ -78,8 +79,10 @@ _KPI_LABELS: dict[str, str] = {
     "recommendation_rejected": "推荐拒绝",
     "recommendation_claimed": "推荐认领",
     "recommendation_project_created": "推荐建项",
-    "recommendation_outreach_sent": "推荐触达",
-    "recommendation_reply_received": "推荐回复",
+    "recommendation_outreach_sent": "推荐触达记录（收发未核验）",
+    "recommendation_reply_received": "推荐回复记录（收发未核验）",
+    "stage_contacted": "手工联系阶段记录（收发未核验）",
+    "stage_replied": "手工回复阶段记录（收发未核验）",
     "recommendation_agreement_reached": "推荐合作",
     "recommendation_content_published": "推荐发布",
     "recommendation_order_attributed": "推荐出单",
@@ -159,6 +162,7 @@ def _staff_kpi_breakdown(conn: Any, staff_id: int, *, start: str, limit: int = 8
         (staff_id, start, max(1, min(300, int(limit or 80)))),
     )
     for row in grouped:
+        row.update(project_kpi_metric_summary(row))
         key = str(row.get("metric_key") or "")
         row["metric_label"] = _KPI_LABELS.get(key, key)
         row["is_recommendation_metric"] = key.startswith("recommendation_")

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from app.domains.kol.profile_recall_filter_modes import normalize_tri_state_filter
 
 
 MAX_OPERATOR_LANGUAGES = 8
@@ -133,7 +134,12 @@ def _language_code(token: str) -> str:
 
 def parse_operator_languages(value: Any) -> dict[str, Any]:
     """Return normalized and invalid explicit language tokens."""
-    tokens = _operator_tokens(value, maximum=MAX_OPERATOR_LANGUAGES + 1)
+    raw, mode, invalid_mode = normalize_tri_state_filter(value)
+    malformed = isinstance(value, dict) and (
+        "values" not in value or not isinstance(raw, (str, list, tuple, set))
+        or (isinstance(raw, (list, tuple, set)) and any(not isinstance(item, str) for item in raw))
+    )
+    tokens = _operator_tokens(raw, maximum=MAX_OPERATOR_LANGUAGES + 1)
     normalized: list[str] = []
     invalid: list[str] = []
     for token in tokens[:MAX_OPERATOR_LANGUAGES]:
@@ -144,11 +150,16 @@ def parse_operator_languages(value: Any) -> dict[str, Any]:
             target.append(resolved)
     if len(tokens) > MAX_OPERATOR_LANGUAGES:
         invalid.append("too_many_values")
+    if invalid_mode:
+        invalid.append("unsupported_filter_mode")
+    if malformed:
+        invalid.append("invalid_filter_shape")
     return {
-        "requested": bool(tokens),
+        "requested": bool(tokens) or malformed or invalid_mode,
         "values": normalized,
         "invalid": invalid,
         "maximum": MAX_OPERATOR_LANGUAGES,
+        **({"mode": mode} if mode != "require" else {}),
     }
 
 

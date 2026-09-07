@@ -467,7 +467,10 @@ def _youtube_data_api_normalize(
                 "likes": 0,
                 "comments": 0,
                 "avg_views": 0,
-                "published": str(snippet.get("publishedAt") or "").strip(),
+                # search.list(type=channel) dates the channel itself, not any
+                # uploaded video. Do not let it satisfy an activity gate.
+                "channel_created_at": str(snippet.get("publishedAt") or "").strip(),
+                "published": "",
                 "market": (market or "").strip().upper(),
                 "search_query": (query or "").strip(),
                 "provider_actor": actor_id,

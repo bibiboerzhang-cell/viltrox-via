@@ -6,8 +6,8 @@ vkpi_recommendation_feedback,派单阶段(contacted/device_sent/content_posted)�
 
   1. vkpi_recommendation_feedback(shortlist/claim/reject/create_project)→ 对应节点;
   2. vkpi_project_kol_assignments.stage(按 kol_pool_id 桥到最新推荐)→ stage 映射;
-  3. vkpi_kol_pool_touches(联系/触达)→ outreach_sent;
-  4. vkpi_messages(外联消息:outbound → outreach_sent / inbound → reply_received;
+  3. vkpi_kol_pool_touches(联系/触达)仅核对归属，不证明发送;
+  4. vkpi_messages(人工消息描述保持通信未知，inbound 不反推发送;
      kol_id 经 vkpi_kol_pool.linked_main_kol_id 桥到池,缺 kol_id 时仅当项目只派了一个 KOL 才归属)
      —— L 车道 2026-08-23 补:外联写口(evidence/messages.py、workflow_evidence_project_writes)不调反馈桥;
   5. sync_favorite_feedback:收藏 / MY KOL 勾选成员 两个写口不经 actions.record_pool_action_feedback
@@ -25,6 +25,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
 from app.domains.recommendations import outcomes as outcome_collector
+from app.domains.recommendations.communication_evidence import COMMUNICATION_NODES, communication_evidence
 
 logger = get_logger(__name__)
 
@@ -57,12 +58,8 @@ STAGE_NODE_MAP: dict[str, str] = {
     "measured": "content_published",
 }
 
-# 阶段链:到达高阶段时低阶段节点一并置位(device_sent 必然经过 contacted)。
-STAGE_IMPLIES: dict[str, tuple[str, ...]] = {
-    "reply_received": ("outreach_sent",),
-    "agreement_reached": ("outreach_sent",),
-    "content_published": ("outreach_sent", "agreement_reached"),
-}
+# 保留非通信阶段映射；任何阶段都不能反推实际发送或回复。
+STAGE_IMPLIES: dict[str, tuple[str, ...]] = {"content_published": ("agreement_reached",)}
 
 
 def _ts(value: Any) -> str | None:
@@ -85,6 +82,7 @@ def _latest_recommendation_for_pool(conn: Any, kol_pool_id: int, *, not_after: A
         ).fetchone()
         if row:
             return int(dict(row)["id"])
+        return 0  # Never assign a past event to a future recommendation.
     row = conn.execute(
         "SELECT id FROM vkpi_kol_recommendations WHERE kol_pool_id=? ORDER BY id DESC LIMIT 1",
         (pool_id,),
@@ -95,6 +93,8 @@ def _latest_recommendation_for_pool(conn: Any, kol_pool_id: int, *, not_after: A
 def _apply_nodes(rec_id: int, nodes: list[str], *, at: Any, context: dict[str, Any]) -> int:
     changed = 0
     for node in nodes:
+        if node in COMMUNICATION_NODES:
+            continue
         if outcome_collector.record_if_missing(rec_id, node, at=_ts(at), context=context):
             changed += 1
     return changed
@@ -170,7 +170,7 @@ def sync_assignment_outcomes(limit: int = 2000) -> dict[str, Any]:
 
 
 def sync_touch_outcomes(limit: int = 2000) -> dict[str, Any]:
-    """联系/触达记录 → outreach_sent。"""
+    """核对触达记录归属；无供应商回执，通信节点保持未知。"""
     if not table_exists("vkpi_kol_pool_touches"):
         return {"status": "table_missing", "scanned": 0, "changed": 0, "no_recommendation": 0}
     conn = get_conn()
@@ -226,7 +226,7 @@ def _sole_project_pool_id(conn: Any, project_id: int) -> int:
 
 
 def sync_message_outcomes(limit: int = 2000) -> dict[str, Any]:
-    """外联消息 → outreach_sent(outbound)/ reply_received(inbound,含 outreach_sent 隐含)。"""
+    """核对人工消息归属；方向和正文不是 transport 证据。"""
     if not table_exists("vkpi_messages"):
         return {"status": "table_missing", "scanned": 0, "changed": 0, "no_recommendation": 0, "ambiguous": 0}
     conn = get_conn()
@@ -324,7 +324,7 @@ _SYNC_ROUTES: tuple[tuple[str, Any], ...] = (
 def sync_action_outcomes(limit: int = 2000) -> dict[str, Any]:
     """五路同步合集(每路单独吞错计数,互不拖垮);由 outcomes.refresh_open_outcomes(run_sync=True)
     在每日 job_vkpi_recommendation_outcomes(04:40)链头调用。"""
-    result: dict[str, Any] = {"status": "ok"}
+    result: dict[str, Any] = {"status": "ok", "communication_evidence": communication_evidence()}
     for name, func in _SYNC_ROUTES:
         try:
             result[name] = func(limit)

@@ -7,11 +7,15 @@ order stays visible without one function owning every policy branch.
 from __future__ import annotations
 
 from typing import Any
+from copy import deepcopy
+import asyncio
+from uuid import uuid4
 
 from app.core.logging import get_logger
 from app.domains.kol import (
     derived_job_actor,
     profile_discovery_evidence,
+    profile_discovery_local_lane,
     profile_discovery_pipeline_online,
     profile_discovery_pipeline_stages,
     profile_discovery_rounds,
@@ -38,6 +42,9 @@ from app.domains.kol.profile_discovery_session import (
     advance_search_session_items,
 )
 from app.domains.kol.search_progress_contract import completion_contract
+from app.domains.kol.search_mode import normalize_search_mode
+from app.domains.kol.search_execution_fence import bind_pipeline_execution, execution_kwargs, require_applied
+from app.domains.kol.provider_job_access import ProviderJobAccessError
 
 logger = get_logger(__name__)
 
@@ -149,6 +156,18 @@ def _enqueue_video_backfill(
         return {"status": "error", "reason": "video_backfill_enqueue_failed"}
 
 
+def _interrupt_lanes(session_id: int, execution_id: str, exc: BaseException) -> None:
+    reason = "search_pipeline_cancelled" if isinstance(exc, asyncio.CancelledError) else "search_pipeline_failed"
+    try:
+        search_sessions.interrupt_search_lanes(session_id, execution_id=execution_id, reason=reason)
+    except Exception as cleanup_error:
+        # Cleanup is best effort when storage is unavailable; never replace the
+        # original error/cancellation or continue into provider/advance work.
+        logger.warning("search lane terminal receipt unconfirmed | session_id=%s error_type=%s",
+                       session_id, type(cleanup_error).__name__)
+
+
+@bind_pipeline_execution
 async def execute_smart_search_profile_advance_pipeline(
     *,
     session_id: int,
@@ -156,7 +175,19 @@ async def execute_smart_search_profile_advance_pipeline(
     provider_actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a queued text recall/new-discovery/profile-advance pipeline."""
-
+    payload = deepcopy(payload)
+    search_mode = normalize_search_mode(payload.get("search_mode"))
+    if "search_mode" in payload:
+        payload["search_mode"] = search_mode
+    if search_mode == "fresh_network":
+        flag = payload.get("include_new_discovery", True)
+        discovery_requested = (flag.strip().lower() not in {"", "0", "false", "no", "off"}
+                               if isinstance(flag, str) else bool(flag))
+        if not discovery_requested:
+            raise ValueError("fresh_network conflicts with include_new_discovery=false")
+        payload["include_new_discovery"] = True
+    elif search_mode == "saved":
+        payload["include_new_discovery"] = False
     stage_deps = _stage_dependencies()
     planning = profile_discovery_pipeline_stages.prepare_plan(
         session_id=int(session_id),
@@ -171,50 +202,132 @@ async def execute_smart_search_profile_advance_pipeline(
         planning,
         stage_deps,
     )
+    independent = search_mode == "hybrid" and payload.get("search_mode") == "hybrid" and payload.get("include_new_discovery") is True
+
+    def read_recall() -> dict[str, Any]:
+        result = targeted_search_runtime.execute_local_search(
+            context=deepcopy(recall_setup.context),
+            recall_kwargs=deepcopy(recall_setup.recall_kwargs),
+            recall=profile_recall.recall_kol_profiles,
+        )
+        result = filter_recall_result_platforms(result, recall_setup.recall_filters.get("platforms"))
+        result = filter_recall_result_market(result, planning.operator_market)
+        return profile_recall_qualification.project_smart_local_result(result)
+
+    async def run_online(base_count: int, advance_limit: int):
+        return await profile_discovery_pipeline_online.run_discovery(
+            profile_discovery_pipeline_online.DiscoveryRequest(
+                session_id=int(session_id), query=planning.query, payload=payload,
+                operator_anchor=planning.operator_anchor, resolved_platforms=recall_setup.resolved_platforms,
+                normalized_market=planning.operator_market, followers_min=recall_setup.followers_min,
+                followers_max=recall_setup.followers_max, follower_source=recall_setup.follower_source,
+                follower_filter=recall_setup.follower_filter, query_cells=recall_setup.query_cells,
+                query_cells_omitted=recall_setup.query_cells_omitted,
+                base_count=base_count, advance_limit=advance_limit,
+            ),
+            discover=discover_new_creators, annotate_priority=_annotate_new_priority,
+            deps=_online_dependencies(),
+        )
+
+    if independent:
+        execution_id = _text(payload.get("_search_execution_id")) or uuid4().hex
+        smart_local = payload.get("_smart_local_30_contract") is True
+        cap = profile_recall_qualification.SMART_LOCAL_TARGET if smart_local else 15
+        advance_limit = max(1, min(_int(payload.get("advance_limit") or payload.get("profile_advance_limit"), cap), cap))
+        for lane in ("local", "online"):
+            search_sessions.update_search_lane(int(session_id), lane=lane, status="running", execution_id=execution_id, **execution_kwargs(payload))
+
+        async def local_branch():
+            local_result = await profile_discovery_local_lane.read_local_lane(read_recall)
+            local_status = _text(local_result.get("status"))
+            if local_status in {"failed", "timeout", "capacity_unavailable"}:
+                search_sessions.update_search_lane(
+                    int(session_id), lane="local", status=local_status,
+                    reason=_text((local_result.get("diagnostics") or {}).get("reason")),
+                    **execution_kwargs(payload),
+                )
+                return profile_discovery_pipeline_stages.RecallState(
+                    result=local_result, session=None, base_count=0,
+                    advance_limit=advance_limit, smart_local_30=smart_local,
+                )
+            return profile_discovery_pipeline_stages.attach_recall(
+                session_id=int(session_id), payload=payload, recall_result=local_result,
+                deps=stage_deps, lane_only=True,
+            )
+
+        async def online_branch():
+            try:
+                return await run_online(0, advance_limit)
+            except (ValueError, PermissionError, ProviderJobAccessError):
+                raise
+            except Exception:
+                search_sessions.update_search_lane(int(session_id), lane="online", status="failed",
+                                                   reason="online_discovery_failed", **execution_kwargs(payload))
+                return profile_discovery_pipeline_online.DiscoveryOutcome(
+                    new_discovery={"status": "failed", "reason": "online_discovery_failed", "items": []},
+                    base_count=0,
+                )
+
+        branches = [asyncio.create_task(local_branch()), asyncio.create_task(online_branch())]
+        try:
+            recall, discovery = await asyncio.gather(*branches)
+        except BaseException as exc:
+            for branch_task in branches:
+                branch_task.cancel()
+            try:
+                await asyncio.gather(*branches, return_exceptions=True)
+            finally:
+                _interrupt_lanes(int(session_id), execution_id, exc)
+            raise
+        recall_result = recall.result
+        discovery = profile_discovery_pipeline_online.DiscoveryOutcome(
+            new_discovery=discovery.new_discovery, base_count=recall.base_count + discovery.base_count,
+        )
     # Keep this call in the facade: it is the provider-free recall seam used by
     # the runtime compatibility binder and the stage-order contract tests.
-    recall_result = targeted_search_runtime.execute_local_search(
-        context=recall_setup.context,
-        recall_kwargs=recall_setup.recall_kwargs,
-        recall=profile_recall.recall_kol_profiles,
-    )
-    recall_result = filter_recall_result_platforms(
-        recall_result,
-        recall_setup.recall_filters.get("platforms"),
-    )
-    recall_result = filter_recall_result_market(
-        recall_result,
-        planning.operator_market,
-    )
-    recall_result = profile_recall_qualification.project_smart_local_result(recall_result)
-    recall = profile_discovery_pipeline_stages.attach_recall(
-        session_id=int(session_id),
-        payload=payload,
-        recall_result=recall_result,
-        deps=stage_deps,
-    )
+    elif search_mode == "fresh_network":
+        recall_result = {
+            "method": "fresh_network", "status": "not_requested", "items": [],
+            "buckets": {"creator": [], "reviewer": []},
+            "diagnostics": {"returned_count": 0, "local_recall_status": "skipped_by_explicit_mode",
+                            "search_mode": "fresh_network", "inventory_recall_performed": False},
+        }
+    else:
+        recall_result = read_recall()
+    if not independent:
+        recall = profile_discovery_pipeline_stages.attach_recall(
+            session_id=int(session_id), payload=payload, recall_result=recall_result, deps=stage_deps,
+        )
 
-    discovery = await profile_discovery_pipeline_online.run_discovery(
-        profile_discovery_pipeline_online.DiscoveryRequest(
-            session_id=int(session_id),
-            query=planning.query,
-            payload=payload,
-            operator_anchor=planning.operator_anchor,
-            resolved_platforms=recall_setup.resolved_platforms,
-            normalized_market=planning.operator_market,
-            followers_min=recall_setup.followers_min,
-            followers_max=recall_setup.followers_max,
-            follower_source=recall_setup.follower_source,
-            follower_filter=recall_setup.follower_filter,
-            query_cells=recall_setup.query_cells,
-            query_cells_omitted=recall_setup.query_cells_omitted,
-            base_count=recall.base_count,
-            advance_limit=recall.advance_limit,
-        ),
-        discover=discover_new_creators,
-        annotate_priority=_annotate_new_priority,
-        deps=_online_dependencies(),
-    )
+    if search_mode == "saved":
+        # No profile advance, model analysis, lazy backfill or field-topup task
+        # may be derived from a saved-only request, even with contradictory flags.
+        session = search_sessions.update_session_result_summary(
+            int(session_id), status="ready", summary_patch={
+                "phase": "complete", "search_mode": "saved",
+                "smart_search_profile_advance_job": {
+                    "status": "ready", "query_text": planning.query,
+                    "new_discovery_status": "not_requested", "advance_status": "not_requested",
+                    "provider_calls_allowed": False,
+                },
+            },
+            **execution_kwargs(payload),
+        )
+        require_applied(session)
+        return {
+            "status": "ready", "search_mode": "saved", "session_id": int(session_id),
+            "query": planning.query, "query_plan_source": payload.get("query_plan_source"),
+            "recall": recall_result, "new_discovery": None,
+            "advance": {"status": "not_requested", "selected": 0, "counts": {}},
+            "content_fit": None, "field_topup": None,
+            "search_session": session or recall.session,
+            "provider_calls_performed": False, "write_db": True,
+            "writes": ["vkpi_kol_search_sessions", "vkpi_kol_search_session_items"],
+            "viltrox_fit_score_changed_ids": [], "viltrox_fit_score_untouched": True,
+        }
+
+    if not independent:
+        discovery = await run_online(recall.base_count, recall.advance_limit)
 
     advance_result = advance_search_session_items(
         session_id=int(session_id),
@@ -278,7 +391,7 @@ async def execute_smart_search_profile_advance_pipeline(
             )
             field_topup = {"status": "error", "reason": "field_topup_enqueue_failed"}
 
-    return profile_discovery_pipeline_stages.finalize_pipeline(
+    result = profile_discovery_pipeline_stages.finalize_pipeline(
         session_id=int(session_id),
         query=planning.query,
         payload=payload,
@@ -292,3 +405,6 @@ async def execute_smart_search_profile_advance_pipeline(
         pipeline_status_resolver=_profile_advance_pipeline_status,
         deps=stage_deps,
     )
+    if "search_mode" in payload:
+        result["search_mode"] = search_mode
+    return result

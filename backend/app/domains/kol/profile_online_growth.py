@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from collections.abc import Callable
 import json
 from typing import Any
 
@@ -87,6 +88,7 @@ def activation_calibration_ids(
     local_canonical_keys: set[str],
     as_of: datetime | None,
     target_count: int,
+    audience_evidence_resolver: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> set[int]:
     """Return identities eligible to influence within-platform percentiles."""
 
@@ -106,6 +108,7 @@ def activation_calibration_ids(
         identity_aliases_fn=profile_recall_qualification.canonical_creator_aliases,
         excluded_identity_reason="duplicate_local_identity",
         as_of=as_of,
+        **({"audience_evidence_resolver": audience_evidence_resolver} if audience_evidence_resolver is not None else {}),
     )
     eligible: set[int] = set()
     for item in probes:

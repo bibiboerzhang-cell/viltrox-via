@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { render } from "@testing-library/react";
+import { createElement } from "react";
 
 import type { VkpiKolSearchHistoryItem } from "../../../../domains/kol";
 
@@ -7,6 +9,7 @@ import {
   strictOnlineDiscoveryPlatforms,
 } from "./SmartKolInputPanel.OnlineQualified";
 import { candidateGrowthSummary } from "./SmartKolInputPanel.CandidateEvidence";
+import { StrictQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
 
 function proof(overrides: Record<string, unknown> = {}) {
   return {
@@ -103,6 +106,56 @@ function session(items: unknown[], contractOverrides: Record<string, unknown> = 
 }
 
 describe("SmartKolInputPanel online strict lane", () => {
+  it.each([null, undefined, 0, 4200])("preserves follower measurement %s through the online list", (followers) => {
+    const gate = proof({ followers: { passed: true, known: followers != null, value: followers } });
+    const item = onlineItem(11, 1, gate);
+    Object.assign(item.payload, { followers });
+    const summary = onlineQualifiedSummaryFromSession(session([item]));
+    expect(summary.rows[0].followers).toBe(followers ?? null);
+    expect(summary.qualified).toBe(1);
+    const rendered = render(createElement(StrictQualifiedList, { summary }));
+    const cells = rendered.container.querySelectorAll("tbody tr td");
+    const expected = followers == null ? "待核验" : new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(followers);
+    expect(Array.from(cells).some((cell) => cell.textContent === expected)).toBe(true);
+  });
+
+  it.each([null, undefined])("does not override an explicit failed follower gate for %s", (followers) => {
+    const gate = proof({ passed: false, followers: { passed: false, known: false, value: followers,
+      requested: true, minimum: 3000 }, rejection_reasons: ["followers_unknown"] });
+    const item = onlineItem(11, 1, gate);
+    Object.assign(item.payload, { followers });
+    const summary = onlineQualifiedSummaryFromSession(session([item]));
+    expect(summary.rows[0].followers).toBeNull();
+    expect(summary.rows[0].strictQualified).toBe(false);
+    expect(summary.qualified).toBe(0);
+  });
+
+  it.each([
+    ["audience_evidence_source_unavailable", "未接入可信受众证据源，已停止本次联网调用"],
+    ["discovery_content_date_unknown", "发现内容的发布日期待核验"],
+    ["discovery_content_identity_missing", "发现内容缺少可核验的链接或编号"],
+    ["discovery_content_date_in_future", "发现内容的发布日期在未来，需核验"],
+    ["discovery_content_outside_window", "发现内容超出本次检索时间范围"],
+    ["discovery_content_not_active", "发现内容的类型或可用状态不符合要求"],
+  ])("explains %s without changing eligibility or counters", (reason, label) => {
+    const baseline = onlineQualifiedSummaryFromSession(session([]));
+    const summary = onlineQualifiedSummaryFromSession(session([], { shortfall_reasons: { [reason]: 1 } }));
+    expect(summary.shortfallReasons).toEqual([`${label} 1`]);
+    expect({ ...summary, shortfallReasons: [] }).toEqual({ ...baseline, shortfallReasons: [] });
+  });
+
+  it("distinguishes a blocked zero-call receipt from exhausted empty results", () => {
+    const summary = onlineQualifiedSummaryFromSession(session([], {
+      status: "blocked", round_gate: { stopped_by: "audience_evidence_source_unavailable" },
+      provider_calls: 0, provider_rounds: 0, evaluated_count: 0, returned_count: 0,
+      net_new_accepted_count: 0, strict_qualified_count: 0, exhausted: false,
+      shortfall_reasons: { audience_evidence_source_unavailable: 1 },
+    }));
+    expect(summary).toMatchObject({ blocked: true, terminal: true, selectionReady: false,
+      qualified: 0, providerCalls: 0, providerRounds: 0, evaluated: 0, exhausted: false,
+      blockReason: "未接入可信受众证据源，已停止本次联网调用" });
+  });
+
   it("never sends unsupported Facebook into the strict-online provider lane", () => {
     expect(strictOnlineDiscoveryPlatforms(["facebook", "youtube", "youtube"])).toEqual(["youtube"]);
     expect(strictOnlineDiscoveryPlatforms(["facebook"])).toEqual([]);

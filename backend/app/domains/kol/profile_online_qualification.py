@@ -40,6 +40,10 @@ from app.domains.kol.profile_online_evidence import (
     identity_probe as _identity_probe,
 )
 from app.domains.kol.profile_query_cell_evidence import build_query_cell_match_evidence
+from app.domains.kol.profile_candidate_observations import (
+    OnlineObservationCache, batch_observation_fingerprint, refresh_accepted_observation,
+    qualification_cell_observations, notify_round_observer, merge_shortfall_reasons, audience_source_block_reason,
+)
 from app.domains.kol.profile_online_qualification_internal import (
     build_outcomes as _build_online_outcomes,
     mark_pending_content as _mark_pending_content,
@@ -56,6 +60,7 @@ from app.domains.kol.profile_online_growth import (
 from app.domains.kol.profile_recall_match_evidence import (
     why_fit_from_match_evidence,
 )
+from app.domains.kol.query_cell_result_coverage import postgate_qualification_stats
 
 
 ONLINE_TARGET = 30
@@ -73,7 +78,11 @@ _PENDING_REASONS = frozenset({
     "followers_unknown",
     "latest_video_unknown",
     "latest_video_identity_missing",
+    "discovery_content_date_unknown",
+    "discovery_content_identity_missing",
     "market_unknown",
+    "creator_country_unknown",
+    "audience_market_unknown",
     "language_unknown",
     "profile_type_unknown",
     "platform_unknown",
@@ -97,6 +106,10 @@ def online_policy(
     followers_max: Any = None,
     source: Any = "operator",
     unknown_policy: Any = profile_recall_qualification.FOLLOWERS_UNKNOWN_PENDING,
+    gate_mode: Any = "relaxed",
+    hide_team_favorites: Any = None,
+    geo_constraints: dict[str, Any] | None = None,
+    provider_discovery_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the immutable online policy by extending the local strict policy."""
     policy = profile_recall_qualification.smart_local_policy(
@@ -104,7 +117,14 @@ def online_policy(
         platforms=platforms,
         languages=languages,
         profile_types=profile_types,
+        gate_mode=gate_mode,
+        hide_team_favorites=hide_team_favorites,
+        geo_constraints=geo_constraints,
     )
+    from app.services.intelligence.account_search_provider_policy import validate_provider_discovery_policy
+    provider_policy = validate_provider_discovery_policy(provider_discovery_policy)
+    if provider_policy is not None:
+        policy["provider_discovery_policy"] = provider_policy
     unsupported = sorted(set(policy.get("platforms") or []) - ONLINE_SUPPORTED_PLATFORMS)
     if unsupported:
         raise ValueError(f"unsupported strict online platforms: {', '.join(unsupported)}")
@@ -215,6 +235,7 @@ def _qualify_online_candidates_internal(
     remaining: int,
     search_brief: dict[str, Any] | None = None,
     as_of: datetime | None = None,
+    audience_evidence_resolver: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     adapted, rows, evidence, sources, cell_inputs = _adapt_candidates(
         candidates,
@@ -238,6 +259,7 @@ def _qualify_online_candidates_internal(
             local_canonical_keys=local_canonical_keys,
             as_of=as_of,
             target_count=ONLINE_TARGET,
+            **({"audience_evidence_resolver": audience_evidence_resolver} if audience_evidence_resolver is not None else {}),
         )
         qualification_stats = _apply_prospective_growth_cell_scoring(
             adapted,
@@ -260,6 +282,7 @@ def _qualify_online_candidates_internal(
         identity_aliases_fn=profile_recall_qualification.canonical_creator_aliases,
         excluded_identity_reason="duplicate_local_identity",
         as_of=as_of,
+        **({"audience_evidence_resolver": audience_evidence_resolver} if audience_evidence_resolver is not None else {}),
     )
     pending_content_ids = _mark_pending_content(adapted)
     _rewrite_pending_counts(strict_contract, pending_content_ids)
@@ -272,10 +295,12 @@ def _qualify_online_candidates_internal(
         canonical_creator_key=profile_recall_qualification.canonical_creator_key,
         project_online_item=_project_online_item,
     )
+    cell_observations = qualification_cell_observations(adapted, outcomes)
     return {
         "outcomes": outcomes,
         "strict_contract": strict_contract,
-        "qualification_stats": qualification_stats,
+        "qualification_stats": postgate_qualification_stats(qualification_stats, cell_observations),
+        "cell_observations": cell_observations,
     }
 
 
@@ -287,6 +312,7 @@ def qualify_online_candidates(
     local_canonical_keys: set[str] | None = None,
     search_brief: dict[str, Any] | None = None,
     as_of: datetime | None = None,
+    audience_evidence_resolver: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Provider-free strict qualification helper used by tests and orchestration."""
     result = _qualify_online_candidates_internal(
@@ -297,6 +323,7 @@ def qualify_online_candidates(
         remaining=ONLINE_TARGET,
         search_brief=search_brief,
         as_of=as_of,
+        **({"audience_evidence_resolver": audience_evidence_resolver} if audience_evidence_resolver is not None else {}),
     )
     outcomes = result["outcomes"]
     accepted = [item["item"] for item in outcomes if item["status"] == "selected"]
@@ -389,9 +416,11 @@ async def collect_strict_online_candidates(
     candidate_budget: int = ONLINE_CANDIDATE_BUDGET,
     max_provider_rounds: int = ONLINE_MAX_PROVIDER_ROUNDS,
     round_gate: Callable[[int], dict[str, Any]] | None = None,
+    round_observer: Callable[[dict[str, Any]], None] | None = None,
     exhaustion_reason: str = "bounded_provider_batch_exhausted",
     search_brief: dict[str, Any] | None = None,
     as_of: datetime | None = None,
+    audience_evidence_resolver: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Collect 30 strict candidates; a denied later-round gate never implies exhaustion."""
     started = perf_counter()
@@ -413,8 +442,10 @@ async def collect_strict_online_candidates(
     cursor: Any = None
     provider_failed, has_more = False, True
     seen_batch_fingerprints: set[str] = set()
+    observation_cache = OnlineObservationCache()
     gate_verdicts: list[dict[str, Any]] = []
-    gate_stop_reason = ""
+    gate_stop_reason = audience_source_block_reason(policy, audience_evidence_resolver)
+    has_more = not gate_stop_reason
 
     def _round_allowed() -> bool:
         nonlocal gate_stop_reason
@@ -450,9 +481,7 @@ async def collect_strict_online_candidates(
         batch = _provider_candidates(provider_result)[:request_limit]
         budget_used += len(batch)
         evaluated += len(batch)
-        fingerprint = hashlib.sha256(json.dumps([
-            profile_recall_qualification.canonical_creator_key(item) for item in batch
-        ], sort_keys=True).encode("utf-8")).hexdigest()
+        fingerprint = batch_observation_fingerprint(batch, profile_recall_qualification.canonical_creator_key)
         if fingerprint in seen_batch_fingerprints:
             status_counts["duplicate_batch"] = status_counts.get("duplicate_batch", 0) + len(batch)
             has_more = False
@@ -467,12 +496,13 @@ async def collect_strict_online_candidates(
                 status_counts["duplicate_local_inventory"] = status_counts.get("duplicate_local_inventory", 0) + 1
                 continue
             aliases = profile_recall_qualification.canonical_creator_aliases(_identity_probe(raw))
-            if aliases.intersection(accepted_aliases):
+            observed = observation_cache.prepare(raw, creator_key=profile_recall_qualification.canonical_creator_key(raw), aliases=aliases, accepted_aliases=accepted_aliases)
+            if observed is None:
                 status_counts["duplicate_online"] = status_counts.get("duplicate_online", 0) + 1
             elif aliases.intersection(inventory_alias_set) and not aliases.intersection(local_canonical_keys):
                 status_counts["duplicate_local_inventory"] = status_counts.get("duplicate_local_inventory", 0) + 1
             else:
-                fresh.append(raw)
+                fresh.append(observed)
         return fresh
 
     def _record_qualification(qualified: dict[str, Any], fresh: list[dict[str, Any]]) -> None:
@@ -491,6 +521,8 @@ async def collect_strict_online_candidates(
 
     async def _materialize_outcome(outcome: dict[str, Any]) -> None:
         nonlocal materialization_db_reads
+        if refresh_accepted_observation(accepted, outcome, profile_recall_qualification.canonical_creator_aliases):
+            return
         source = outcome.get("source") if isinstance(outcome.get("source"), dict) else {}
         try:
             materialized = await _maybe_await(enroll_candidate(source))
@@ -575,6 +607,7 @@ async def collect_strict_online_candidates(
             remaining=max(1, ONLINE_TARGET - len(accepted)),
             search_brief=search_brief,
             as_of=as_of,
+            **({"audience_evidence_resolver": audience_evidence_resolver} if audience_evidence_resolver is not None else {}),
         )
         _record_qualification(qualified, fresh_batch)
         _finish_round(provider_result, batch)
@@ -582,28 +615,22 @@ async def collect_strict_online_candidates(
             status_counts["pending"] = status_counts.get("pending", 0) + len(qualified["outcomes"])
         else:
             await _consume_outcomes(qualified["outcomes"])
+        if not notify_round_observer(round_observer, {"round_no": provider_rounds, "budget_used": budget_used,
+                "candidate_budget": budget, "accepted_count": len(accepted), "provider_stop_reason": gate_stop_reason,
+                "observations": qualified.get("cell_observations") or [], "accepted": accepted}):
+            gate_stop_reason = "observer_failed"
+            break
 
     def _shortfall_details() -> tuple[int, dict[str, int]]:
         shortfall = max(0, ONLINE_TARGET - len(accepted))
-        shortfall_reasons = dict(rejected_by_reason)
-        reasons = (
-            "pending", "rejected", "duplicate_local", "duplicate_local_inventory",
-            "duplicate_online", "duplicate_batch",
+        terminal_reason = (
+            "provider_failed" if provider_failed
+            else gate_stop_reason if gate_stop_reason
+            else "candidate_budget_exhausted" if budget_used >= budget
+            else "provider_round_budget_exhausted" if has_more and provider_rounds >= max_rounds
+            else _text(exhaustion_reason) or "bounded_provider_batch_exhausted"
         )
-        for reason in reasons:
-            count = status_counts.get(reason, 0)
-            if count:
-                shortfall_reasons[reason] = shortfall_reasons.get(reason, 0) + count
-        if shortfall:
-            terminal_reason = (
-                "provider_failed" if provider_failed
-                else gate_stop_reason if gate_stop_reason
-                else "candidate_budget_exhausted" if budget_used >= budget
-                else "provider_round_budget_exhausted" if has_more and provider_rounds >= max_rounds
-                else _text(exhaustion_reason) or "bounded_provider_batch_exhausted"
-            )
-            shortfall_reasons[terminal_reason] = shortfall_reasons.get(terminal_reason, 0) + shortfall
-        return shortfall, shortfall_reasons
+        return shortfall, merge_shortfall_reasons(rejected_by_reason, status_counts, shortfall=shortfall, terminal_reason=terminal_reason)
 
     def _finalize() -> dict[str, Any]:
         shortfall, shortfall_reasons = _shortfall_details()
@@ -648,7 +675,7 @@ async def collect_strict_online_candidates(
                 "exclude_chinese_regions": policy.get("exclude_chinese_regions") is True,
             },
             "query": {"query_text": _text(query_text)[:500], "source": "server_effective_query"},
-            "status": "ready" if not shortfall else "shortfall",
+            "status": "blocked" if gate_stop_reason == "audience_evidence_source_unavailable" else "ready" if not shortfall else "shortfall",
             "terminal": True,
             "snapshot_complete": True,
             "snapshot_revision": max(1, provider_rounds),
@@ -676,7 +703,7 @@ async def collect_strict_online_candidates(
             "inventory_db_reads": max(0, int(inventory_db_reads or 0)),
             "materialization_db_reads": materialization_db_reads,
             "total_identity_db_reads": max(0, int(inventory_db_reads or 0)) + materialization_db_reads,
-            "exhausted": not has_more and gate_stop_reason not in {"provider_outcome_unknown", "provider_dispatch_blocked", "provider_partial"},
+            "exhausted": not has_more and gate_stop_reason not in {"provider_outcome_unknown", "provider_dispatch_blocked", "provider_partial", "audience_evidence_source_unavailable"},
             "round_gate": {"stopped_by": gate_stop_reason or None, "verdicts": gate_verdicts},
             "shortfall": shortfall,
             "shortfall_reasons": shortfall_reasons,
@@ -706,9 +733,11 @@ async def collect_strict_online_for_session(
     candidate_budget: int = ONLINE_CANDIDATE_BUDGET,
     max_provider_rounds: int = ONLINE_MAX_PROVIDER_ROUNDS,
     round_gate: Callable[[int], dict[str, Any]] | None = None,
+    round_observer: Callable[[dict[str, Any]], None] | None = None,
     exhaustion_reason: str = "bounded_provider_batch_exhausted",
     search_brief: dict[str, Any] | None = None,
     as_of: datetime | None = None,
+    audience_evidence_resolver: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Session-safe entry point: local dedupe keys always come from the DB."""
     from app.db.connection import get_conn
@@ -728,6 +757,8 @@ async def collect_strict_online_for_session(
         candidate_budget=candidate_budget,
         max_provider_rounds=max_provider_rounds,
         round_gate=round_gate,
+        **({"round_observer": round_observer} if round_observer is not None else {}),
+        **({"audience_evidence_resolver": audience_evidence_resolver} if audience_evidence_resolver is not None else {}),
         exhaustion_reason=exhaustion_reason,
         search_brief=search_brief,
         as_of=as_of,

@@ -9,6 +9,7 @@ from psycopg.rows import dict_row
 
 from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 from app.domains.kol.search_progress_contract import completion_contract
+from app.domains.kol.search_sessions_lanes import preserve_execution_failure
 from app.domains.kol.search_session_job_support import (
     LINEAGE_STAGE_ROLES,
     as_dict,
@@ -459,6 +460,7 @@ def build_search_session_summary(
     *,
     session_status: str,
 ) -> dict[str, Any]:
+    session_status = preserve_execution_failure(current_summary, session_status)
     items = _summary_items(item_rows)
     counts = search_session_item_counts(items)
     progress, stages, terminal_count, profile_ready, profile_failed, progressive = (
@@ -481,6 +483,8 @@ def build_search_session_summary(
         if session_status == "running"
         else ("complete" if session_status == "ready" else "partial")
     )
+    if preserve_execution_failure(current_summary, "ready") == "failed":
+        phase = "failed"
     summary = {
         **current_summary,
         "phase": phase,
@@ -544,6 +548,7 @@ def rebuild_search_session_summary(
         FROM vkpi_kol_search_sessions
         WHERE id=%s
         LIMIT 1
+        FOR NO KEY UPDATE
         """,
         (int(session_id),),
     )
@@ -556,6 +561,7 @@ def rebuild_search_session_summary(
     )
     if not isinstance(current_summary, dict):
         current_summary = {}
+    session_status = preserve_execution_failure(current_summary, session_status)
     cur.execute(
         """
         SELECT id, item_type, status, stage, rank, score, kol_pool_id, evidence_id, job_id, source_url, payload_json, updated_at

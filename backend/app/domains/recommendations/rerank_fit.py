@@ -1,6 +1,6 @@
 """影子重排序·周拟合作业(学习闭环 W-L2·拟合段)。
 
-输入:vkpi_recommendation_feature_snapshot(推荐时刻特征)× vkpi_recommendation_outcomes(真实结果)。
+输入:推荐时刻特征 × 非通信运营偏好标签；不是送达、回复或合作成功预测。
 产出:vkpi_recommendation_rerank_model 一行(numpy logistic 权重 + 指标 + 理由码)。
 
 激活规则(硬):样本 < ``VKPI_RECO_FIT_MIN_SAMPLES``(默认 30)或正/负类任一 < 5 → 落账但
@@ -16,6 +16,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.recommendations import rerank_shadow as shadow
+from app.domains.recommendations.communication_evidence import LABEL_SEMANTICS, LABEL_SEMANTICS_VERSION
 from app.shared.vkpi_utils import utcnow_iso
 
 logger = get_logger(__name__)
@@ -29,14 +30,11 @@ DEFAULT_INTERVAL_DAYS = 7
 DEFAULT_LABEL_WINDOW_DAYS = 14
 ACTIVATION_RULE = "samples>=min_samples(30) and positives>=5 and negatives>=5"
 
-# 正向结果节点(任一为真 → 标签 1);was_rejected 为真 → 标签 0;
-# 超过标签窗口仍无任何动作 → 标签 0(沉默即负例,窗口内沉默 = 未定,不入样本)。
+# 运营偏好标签，不是送达、回复或合作成功证明；沉默保持未知。
 POSITIVE_NODES: tuple[str, ...] = (
     "was_shortlisted",
     "was_claimed",
     "project_created",
-    "outreach_sent",
-    "reply_received",
     "agreement_reached",
     "content_published",
     "order_attributed",
@@ -70,6 +68,7 @@ def _interval_days() -> float:
 
 
 def _label_window_days() -> float:
+    """Legacy configuration reader only; elapsed silence no longer creates a label."""
     return max(0.0, shadow.env_float(LABEL_WINDOW_DAYS_ENV, float(DEFAULT_LABEL_WINDOW_DAYS)))
 
 
@@ -77,23 +76,17 @@ def _label_window_days() -> float:
 
 
 def label_for_outcome(outcome: dict[str, Any] | None, *, recommended_at: Any, now: datetime | None = None) -> tuple[int | None, list[str]]:
-    """从 outcome 行推标签:(label, 命中的正向节点)。返回 (None, []) = 未定,不入样本。"""
+    """运营偏好标签，不推通信真假；兼容保留时间参数，沉默永远不成为负样本。"""
     nodes = [node for node in POSITIVE_NODES if outcome and shadow.truthy(outcome.get(node))]
     if nodes:
         return 1, nodes
     if outcome and shadow.truthy(outcome.get("was_rejected")):
         return 0, ["was_rejected"]
-    recommended = _parse_ts(recommended_at)
-    if recommended is None:
-        return None, []
-    age = (now or _now()) - recommended
-    if age >= timedelta(days=_label_window_days()):
-        return 0, ["silent_after_window"]
     return None, []
 
 
 def label_snapshots(limit: int = 2000) -> dict[str, Any]:
-    """把 outcomes 真实结果回流成快照标签(幂等:标签变了才 UPDATE;未定行保持 NULL)。"""
+    """回流运营偏好标签；旧未定标签不回写，训练读取必须重新验证资格。"""
     if not shadow.tables_ready():
         return {"status": "tables_missing", "labeled": 0, "pending": 0, "scanned": 0}
     conn = get_conn()
@@ -136,19 +129,30 @@ def label_snapshots(limit: int = 2000) -> dict[str, Any]:
         )
         labeled += 1
     conn.commit()
-    return {"status": "ok", "scanned": len(rows), "labeled": labeled, "pending": pending, "positives_seen": positives}
+    return {"status": "ok", "scanned": len(rows), "labeled": labeled, "pending": pending,
+            "positives_seen": positives, "label_semantics": LABEL_SEMANTICS}
 
 
 # ── 拟合 ────────────────────────────────────────────────────────────────
 
 
 def _load_training_rows(limit: int = 5000) -> list[dict[str, Any]]:
+    return _load_eligible_rows(limit, holdout=False)
+
+
+def _load_eligible_rows(limit: int, *, holdout: bool) -> list[dict[str, Any]]:
+    # Stored labels may predate the evidence contract. Recompute on every read,
+    # including rows whose historical label is NULL or contradicts current facts.
+    order = "s.created_at ASC, s.id ASC" if holdout else "s.id DESC"
     rows = get_conn().execute(
         f"""
-        SELECT feature_vector, outcome_label
-        FROM {shadow.SNAPSHOT_TABLE}
-        WHERE outcome_label IS NOT NULL AND feature_keys_version=?
-        ORDER BY id DESC
+        SELECT s.feature_vector, s.base_score, o.recommended_at,
+               o.was_shortlisted, o.was_rejected, o.was_claimed, o.project_created,
+               o.agreement_reached, o.content_published, o.order_attributed
+        FROM {shadow.SNAPSHOT_TABLE} s
+        LEFT JOIN vkpi_recommendation_outcomes o ON o.recommendation_id=s.recommendation_id
+        WHERE s.feature_keys_version=?
+        ORDER BY {order}
         LIMIT ?
         """,
         (shadow.FEATURE_KEYS_VERSION, int(max(1, min(int(limit or 5000), 50000)))),
@@ -157,10 +161,13 @@ def _load_training_rows(limit: int = 5000) -> list[dict[str, Any]]:
     for raw in rows:
         row = dict(raw)
         vector = shadow.loads(row.get("feature_vector"), {})
-        label = row.get("outcome_label")
+        label, _ = label_for_outcome(row, recommended_at=row.get("recommended_at"))
         if not vector or label is None:
             continue
-        out.append({"vector": vector, "label": int(label)})
+        item = {"vector": vector, "label": int(label)}
+        if holdout:
+            item["base_score"] = float(row.get("base_score") or 0.0)
+        out.append(item)
     return out
 
 
@@ -239,6 +246,8 @@ def _store_model(
     reason_codes: list[str],
 ) -> dict[str, Any]:
     now = utcnow_iso()
+    metrics = {**metrics, "label_semantics": LABEL_SEMANTICS,
+               "label_semantics_version": LABEL_SEMANTICS_VERSION}
     conn = get_conn()
     conn.execute(
         f"""
@@ -428,24 +437,7 @@ def _predict_proba(fitted: dict[str, Any], vector: dict[str, Any]) -> float:
 
 
 def _load_holdout_rows(limit: int = 5000) -> list[dict[str, Any]]:
-    rows = get_conn().execute(
-        f"""
-        SELECT feature_vector, outcome_label, base_score, created_at
-        FROM {shadow.SNAPSHOT_TABLE}
-        WHERE outcome_label IS NOT NULL AND feature_keys_version=?
-        ORDER BY created_at ASC, id ASC
-        LIMIT ?
-        """,
-        (shadow.FEATURE_KEYS_VERSION, int(max(1, min(int(limit or 5000), 50000)))),
-    ).fetchall()
-    out: list[dict[str, Any]] = []
-    for raw in rows:
-        row = dict(raw)
-        vector = shadow.loads(row.get("feature_vector"), {})
-        if not vector or row.get("outcome_label") is None:
-            continue
-        out.append({"vector": vector, "label": int(row["outcome_label"]), "base_score": float(row.get("base_score") or 0.0)})
-    return out
+    return _load_eligible_rows(limit, holdout=True)
 
 
 def holdout_eval(*, limit: int = 5000, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -458,6 +450,7 @@ def holdout_eval(*, limit: int = 5000, rows: list[dict[str, Any]] | None = None)
     min_samples = _min_samples()
     base: dict[str, Any] = {
         "method": "time_split_holdout_v1", "n": n, "min_samples": min_samples,
+        "label_semantics": LABEL_SEMANTICS,
         "train_share": HOLDOUT_TRAIN_SHARE, "k": HOLDOUT_K, "feature_keys_version": shadow.FEATURE_KEYS_VERSION,
     }
     if n < min_samples:

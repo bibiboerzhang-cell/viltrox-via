@@ -8,7 +8,9 @@ isolation without making provider calls.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 from typing import Any, Callable
+from app.domains.kol.search_execution_fence import execution_kwargs, require_applied, superseded_result
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,9 @@ _UNTRUSTED_PLAN_KEYS = (
     "search_brief",
     "query_cells",
     "follower_filter",
+    "filter_proposal",
+    "operator_search_spec",
+    "query_plan_semantics",
 )
 
 
@@ -112,6 +117,8 @@ def _resolve_worker_plan(
 ) -> tuple[dict[str, Any], str]:
     planner = deps.smart_query_planner
     guard_plan = planner.plan_text_query_provider_free(query, body=payload)
+    if payload.get("search_mode") == "saved":
+        return guard_plan, "provider_free_saved"
     try:
         rich_plan = planner.plan_text_query(query, body=payload, staff=None)
         source = "llm_plan"
@@ -140,7 +147,7 @@ def _clarification_result(
         terminal_count=0,
         ready_count=0,
     )
-    deps.search_sessions.update_session_result_summary(
+    session = deps.search_sessions.update_session_result_summary(
         int(session_id),
         status="partial",
         summary_patch={
@@ -164,6 +171,7 @@ def _clarification_result(
             },
         },
     )
+    require_applied(session)
     return {
         "status": "needs_clarification",
         "session_id": int(session_id),
@@ -207,6 +215,7 @@ def _apply_plan(
         if isinstance(plan.get("follower_filter"), dict)
         else {}
     )
+    payload["filter_proposal"] = deepcopy(plan.get("filter_proposal") or {})
     if not payload.get("product_sku") and isinstance(plan.get("resolved_product"), dict):
         payload["product_sku"] = deps.text(plan["resolved_product"].get("sku"))
     for key in ("creator_quota", "reviewer_quota", "new_discovery_limit"):
@@ -305,6 +314,8 @@ def prepare_recall(
         platforms=resolved_platforms,
     )
     recall_filters = context["recall_filters"]
+    if isinstance(context.get("operator_search_spec"), dict):
+        payload["operator_search_spec"] = deepcopy(context["operator_search_spec"])
     recall_kwargs = {
         "query_text": planning.query,
         "product_sku": deps.text(payload.get("product_sku")),
@@ -366,7 +377,10 @@ def attach_recall(
     payload: dict[str, Any],
     recall_result: dict[str, Any],
     deps: StageDependencies,
+    lane_only: bool = False,
 ) -> RecallState:
+    if isinstance(payload.get("operator_search_spec"), dict):
+        recall_result["operator_search_spec"] = deepcopy(payload["operator_search_spec"])
     if isinstance(payload.get("llm_query_plan"), dict):
         recall_result["llm_query_plan"] = payload["llm_query_plan"]
     items = recall_result.get("items") if isinstance(recall_result.get("items"), list) else []
@@ -417,7 +431,9 @@ def attach_recall(
                 **contract,
             },
         },
+        **({"lane_only": True} if lane_only else {}),
     )
+    require_applied(recall_session)
     return RecallState(
         result=recall_result,
         session=recall_session,
@@ -524,6 +540,46 @@ def _profile_counts(
     return profile_ready, profile_failed, selected_count, profile_completed
 
 
+def _lane_completion_projection(
+    payload: dict[str, Any],
+    recall: RecallState,
+    new_discovery: dict[str, Any] | None,
+    pipeline_status: str,
+) -> dict[str, Any]:
+    """Keep lane evidence separate from the global completion contract."""
+    projection = {
+        "status": pipeline_status,
+        "summary": {},
+        "recall_count": len(recall.result.get("items") or []),
+        "provider_calls": True,
+    }
+    if not (payload.get("search_mode") == "hybrid" and payload.get("include_new_discovery") is True):
+        return projection
+    local_status = str(recall.result.get("status") or "ready")
+    local_failed = local_status in {"failed", "timeout", "capacity_unavailable"}
+    online = new_discovery or {}
+    online_items = online.get("items") or [*(online.get("existing_matches") or []), *(online.get("new_creators") or [])]
+    online_status = str(online.get("status") or "not_requested")
+    online_failed = online_status in {"failed", "timeout", "blocked"}
+    online_count = online.get("returned_count")
+    if online_count is None:
+        online_count = len(online_items)
+    projection["summary"] = {"search_lanes": {
+        "local": {
+            "status": local_status if local_failed else "ready" if recall.base_count else "empty",
+            "returned_count": None if local_failed else recall.base_count,
+        },
+        "online": {"status": online_status, "returned_count": None if online_failed else online_count},
+    }}
+    projection["recall_count"] = None if local_failed else projection["recall_count"]
+    projection["provider_calls"] = online.get("provider_calls_performed")
+    if local_failed and online_failed:
+        projection["status"] = "failed"
+    elif (local_failed or online_failed) and pipeline_status == "ready":
+        projection["status"] = "partial"
+    return projection
+
+
 def finalize_pipeline(
     *,
     session_id: int,
@@ -540,6 +596,8 @@ def finalize_pipeline(
     deps: StageDependencies,
 ) -> dict[str, Any]:
     pipeline_status = pipeline_status_resolver(recall.result, new_discovery, advance_result)
+    lane_projection = _lane_completion_projection(payload, recall, new_discovery, pipeline_status)
+    pipeline_status = lane_projection["status"]
     final_status = "partial" if changed_ids else pipeline_status
     profile_ready, profile_failed, selected_count, profile_completed = _profile_counts(
         advance_result,
@@ -559,6 +617,7 @@ def finalize_pipeline(
         int(session_id),
         status=final_status,
         summary_patch={
+            **lane_projection["summary"],
             "phase": "complete" if final_status == "ready" else "partial",
             "progress": {
                 "base": base_count,
@@ -577,7 +636,7 @@ def finalize_pipeline(
             "smart_search_profile_advance_job": {
                 "status": pipeline_status,
                 "query_text": query,
-                "recall_returned": len(recall.result.get("items") or []),
+                "recall_returned": lane_projection["recall_count"],
                 "new_discovery_status": (
                     (new_discovery or {}).get("status") if new_discovery else "not_requested"
                 ),
@@ -603,9 +662,13 @@ def finalize_pipeline(
                 "query_plan_source": payload.get("query_plan_source"),
             },
         },
+        **execution_kwargs(payload),
     )
+    if final_session and final_session.get("write_applied") is False:
+        return {**superseded_result(session_id), "search_session": final_session}
     return {
         "status": pipeline_status,
+        **lane_projection["summary"],
         "session_id": int(session_id),
         "query": query,
         "query_plan_source": payload.get("query_plan_source"),
@@ -613,7 +676,7 @@ def finalize_pipeline(
         "field_topup": field_topup,
         "recall": {
             "method": recall.result.get("method"),
-            "returned_count": len(recall.result.get("items") or []),
+            "returned_count": lane_projection["recall_count"],
             "diagnostics": recall.result.get("diagnostics"),
             "local_qualification": recall.result.get("local_qualification"),
             "search_session": final_session or recall.session,
@@ -621,7 +684,7 @@ def finalize_pipeline(
         "new_discovery": new_discovery,
         "advance": advance_result,
         "search_session": final_session or recall.session,
-        "provider_calls_performed": True,
+        "provider_calls_performed": lane_projection["provider_calls"],
         "write_db": True,
         "writes": [
             "vkpi_kol_search_sessions",

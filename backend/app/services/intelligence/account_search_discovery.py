@@ -35,6 +35,9 @@ from app.services.intelligence.account_search_youtube_strict_runtime import (
     run_strict_search_pages,
 )
 from app.services.intelligence.account_search_youtube_metrics import _youtube_channel_statistics, youtube_activation_coverage, youtube_channel_activation_summary, youtube_exact_query_failure, youtube_quota_metadata, youtube_sample_video_ids, youtube_video_statistics
+from app.services.intelligence.account_search_provider_policy import (
+    annotate_discovery_result, validate_provider_discovery_policy, youtube_discovery_hints,
+)
 
 # IG 腿的检索词/收敛/富化已拆到 account_search_instagram.py(800 软棘轮:本文件在
 # 快照里锁死 843 行)。原名 re-export —— account_scan_service 的 re-export 链与
@@ -119,6 +122,7 @@ def _verify_market(
 async def _youtube_data_api_search(
     search_query: str, *, market: str = "", safe_limit: int = 25,
     relevance_language: str = "en", exact_query: bool = False,
+    provider_discovery_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
     """YouTube Data API fast path (search.list type=channel, ~1s). None => fall back to Apify.
 
@@ -135,6 +139,7 @@ async def _youtube_data_api_search(
     """
     from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
 
+    provider_discovery_policy = validate_provider_discovery_policy(provider_discovery_policy)
     crawler = YouTubeCrawler()
     if not crawler.api_key:
         return None
@@ -148,6 +153,11 @@ async def _youtube_data_api_search(
     if not variants:
         return None
     merge_cap = min(50, max(1, int(safe_limit or 25)) * 2)
+    language_hints = (
+        youtube_discovery_hints(provider_discovery_policy, video_evidence=False)
+        if provider_discovery_policy is not None
+        else {"relevanceLanguage": (relevance_language or "en").strip().lower() or "en"}
+    )
 
     def _channel_search(q: str) -> Dict[str, Any] | None:
         payload = crawler._request(
@@ -157,7 +167,7 @@ async def _youtube_data_api_search(
                 "type": "channel",
                 "q": q,
                 "maxResults": max(1, min(25, int(safe_limit or 25))),
-                "relevanceLanguage": (relevance_language or "en").strip().lower() or "en",
+                **language_hints,
                 "safeSearch": "none",
             },
         )
@@ -251,6 +261,7 @@ async def _youtube_data_api_strict_video_search(
     relevance_language: str = "en",
     page_cursor: Any = None,
     exact_query: bool = False,
+    provider_discovery_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
     """Fetch real <=45-day videos, then batch-enrich their declared channels.
 
@@ -275,6 +286,7 @@ async def _youtube_data_api_strict_video_search(
         anchor_index=term_anchor_index,
         precision_terms_default=PRECISION_TERMS_DEFAULT,
         exhausted_token=TERM_EXHAUSTED_TOKEN,
+        provider_discovery_policy=provider_discovery_policy,
     )
     if plan is None:
         return None
@@ -332,7 +344,8 @@ async def _youtube_data_api_strict_video_search(
         query_anchor_signals=query_anchor_signals,
     )
     result["metadata"]["market_verification"] = market_verification_summary(items)
-    return result
+    return annotate_discovery_result(result, plan.provider_discovery_policy,
+                                     provider="youtube_data_api", resource_kind="video")
 
 
 async def _youtube_fast_result(
@@ -345,11 +358,14 @@ async def _youtube_fast_result(
     strict_evidence: bool,
     page_cursor: Any,
     exact_query: bool,
+    provider_discovery_policy: Dict[str, Any] | None = None,
 ) -> tuple[bool, Dict[str, Any] | None]:
     """Run the existing YouTube fast path and report whether it is terminal."""
 
     if normalized_platform != "youtube":
         return False, None
+    policy_kwargs = ({"provider_discovery_policy": provider_discovery_policy}
+                     if provider_discovery_policy is not None else {})
     fast = await (
         _youtube_data_api_strict_video_search(
             search_query,
@@ -358,6 +374,7 @@ async def _youtube_fast_result(
             relevance_language=relevance_language,
             page_cursor=page_cursor,
             exact_query=exact_query,
+            **policy_kwargs,
         )
         if strict_evidence
         else _youtube_data_api_search(
@@ -366,11 +383,15 @@ async def _youtube_fast_result(
             safe_limit=safe_limit,
             relevance_language=relevance_language,
             exact_query=exact_query,
+            **policy_kwargs,
         )
     )
     if fast is not None and (
         exact_query or strict_evidence or len(fast.get("items") or []) >= min(3, safe_limit)
     ):
+        if not strict_evidence:
+            fast = annotate_discovery_result(fast, provider_discovery_policy,
+                                             provider="youtube_data_api", resource_kind="channel")
         return True, fast
     if not exact_query:
         return False, None
@@ -399,6 +420,7 @@ async def search_platform_content(
     deadline_seconds: float | None = None,
     page_cursor: Any = None,
     exact_query: bool = False,
+    provider_discovery_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Search public platform content and normalize it into KOL candidates.
 
@@ -420,6 +442,7 @@ async def search_platform_content(
     page/skip 任何一个字段(2026-08-25 逐个核对),所以这两条腿的 metadata 一律
     ``pagination_supported=False`` + ``has_more=False``,绝不伪造游标假装还能翻页。
     """
+    provider_discovery_policy = validate_provider_discovery_policy(provider_discovery_policy)
     leg_started_monotonic = time.monotonic()
     normalized_platform = (platform or "youtube").strip().lower()
     normalized_query = (query or "").strip()
@@ -433,8 +456,8 @@ async def search_platform_content(
             deadline_seconds=deadline_seconds, page_cursor=page_cursor,
         )
         result["items"] = _verify_market(result.get("items", []), market)
-        return result
-    search_query = _market_query(normalized_query, market)
+        return annotate_discovery_result(result, provider_discovery_policy, provider="apify")
+    search_query = normalized_query if exact_query else _market_query(normalized_query, market)
 
     # YouTube Data API 快路不足三条时继续走 Apify 补深。
     fast_is_terminal, fast_result = await _youtube_fast_result(
@@ -446,6 +469,7 @@ async def search_platform_content(
         strict_evidence=strict_evidence,
         page_cursor=page_cursor,
         exact_query=exact_query,
+        **({"provider_discovery_policy": provider_discovery_policy} if provider_discovery_policy is not None else {}),
     )
     if fast_is_terminal:
         return fast_result or {}
@@ -521,7 +545,7 @@ async def search_platform_content(
     if actor_failure:
         result["status"] = actor_failure["status"]
         result["metadata"].update(actor_failure["metadata"])
-    return result
+    return annotate_discovery_result(result, provider_discovery_policy, provider="apify")
 
 
 async def _no_owner_profiles(*args: Any, **kwargs: Any) -> dict[str, Any]:

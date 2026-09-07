@@ -215,6 +215,12 @@ def attribution_utm(
 # Payouts
 # =========================================================================
 
+def _payout_mutation(action, *args):
+    try:
+        return action(*args)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
 @router.get("/payouts/cycles")
 def list_cycles(admin=Depends(require_admin)):
     return payouts_svc.list_cycles()
@@ -241,12 +247,15 @@ def approve_all_in_cycle(cycle_id: str, request: Request, admin=Depends(require_
 
 @router.post("/payouts/cycle/{cycle_id}/process")
 def process_cycle(cycle_id: str, request: Request, admin=Depends(require_admin)):
-    """Move all approved payouts in cycle to paid. Triggers PayPal/bank send."""
-    result = payouts_svc.process_cycle(cycle_id, admin["id"])
+    """Return confirmed/blocked/unknown outcomes; no payment adapter is configured."""
+    result = _payout_mutation(payouts_svc.process_cycle, cycle_id, admin["id"])
     record_admin_action(
         actor=admin, action="process_payout_cycle",
         target_type="payout_cycle", target_id=cycle_id,
-        detail={"processed_count": result.get("processed_count")},
+        detail={key: result.get(key) for key in (
+            "status", "processed_count", "cycle_complete", "cycle_status",
+            "provider_calls_performed", "unresolved_count", "unknown_count", "blocked_legacy_receipt_count",
+        )},
         request=request,
     )
     return result
@@ -259,7 +268,7 @@ def payout_history(user_id: int, admin=Depends(require_admin)):
 
 @router.post("/payouts/{payout_id}/approve")
 def approve_payout(payout_id: int, request: Request, admin=Depends(require_admin)):
-    result = payouts_svc.approve_one(payout_id, admin["id"])
+    result = _payout_mutation(payouts_svc.approve_one, payout_id, admin["id"])
     record_admin_action(
         actor=admin, action="approve_payout",
         target_type="payout", target_id=str(payout_id),
@@ -275,7 +284,7 @@ def hold_payout(
     reason = body.get("reason")
     if not reason:
         raise HTTPException(400, "reason required")
-    result = payouts_svc.hold_one(payout_id, reason, admin["id"])
+    result = _payout_mutation(payouts_svc.hold_one, payout_id, reason, admin["id"])
     record_admin_action(
         actor=admin, action="hold_payout",
         target_type="payout", target_id=str(payout_id),
@@ -286,7 +295,7 @@ def hold_payout(
 
 @router.post("/payouts/{payout_id}/release")
 def release_payout(payout_id: int, request: Request, admin=Depends(require_admin)):
-    result = payouts_svc.release_one(payout_id, admin["id"])
+    result = _payout_mutation(payouts_svc.release_one, payout_id, admin["id"])
     record_admin_action(
         actor=admin, action="release_payout",
         target_type="payout", target_id=str(payout_id),
@@ -303,7 +312,7 @@ def adjust_payout(
     reason = body.get("reason")
     if new_amount is None or not reason:
         raise HTTPException(400, "new_amount_cents and reason required")
-    result = payouts_svc.adjust_one(payout_id, new_amount, reason, admin["id"])
+    result = _payout_mutation(payouts_svc.adjust_one, payout_id, new_amount, reason, admin["id"])
     record_admin_action(
         actor=admin, action="adjust_payout",
         target_type="payout", target_id=str(payout_id),

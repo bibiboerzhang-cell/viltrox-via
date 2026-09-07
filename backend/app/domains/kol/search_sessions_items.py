@@ -7,6 +7,9 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol.search_sessions_completion import session_completion_breakdown
+from app.domains.kol.search_sessions_lanes import preserve_execution_failure, retain_execution_observation
+from app.domains.kol.search_execution_fence import locked_write_allowed, permits_write, resolve_fence, superseded_result
+from app.domains.kol.search_sessions_attachment_status import _session_status_after_profile_item
 from app.domains.kol.search_sessions_identity_projection import (
     _CREATOR_ITEM_LANES,
     _canonical_session_dedupe_key,
@@ -123,12 +126,6 @@ def project_session_result_summary(
     )
     return projected
 
-def _session_status_after_profile_item(current_status: str, current_phase: str, item_status: str) -> str:
-    if _text(current_status).lower() == "running" and _text(current_phase).lower() in {"base", "profile"}:
-        return "running"
-    return _normalize_status(item_status)
-
-
 def get_session_item(
     session_id: int,
     item_id: int,
@@ -159,6 +156,9 @@ def update_item_profile_execution(
 ) -> dict[str, Any]:
     """Persist profile-crawl execution result for a discovery item."""
     conn = (get_conn_fn or get_conn)()
+    if not locked_write_allowed(conn, session_id):
+        conn.commit()
+        return superseded_result(session_id)
     row = conn.execute(
         """
         SELECT *
@@ -234,7 +234,7 @@ def update_item_profile_execution(
     ).fetchone()
 
     session_row = conn.execute(
-        "SELECT status, result_summary_json FROM vkpi_kol_search_sessions WHERE id=?",
+        "SELECT status, result_summary_json FROM vkpi_kol_search_sessions WHERE id=? FOR NO KEY UPDATE",
         (int(session_id),),
     ).fetchone()
     summary = _loads(dict(session_row).get("result_summary_json") if session_row else "{}", {})
@@ -291,8 +291,11 @@ def update_item_profile_execution(
     current_session_status = _text(dict(session_row).get("status") if session_row else "").lower()
     current_phase = _text(summary.get("phase")).lower()
     session_status = _session_status_after_profile_item(current_session_status, current_phase, next_status)
+    session_status = preserve_execution_failure(summary, session_status)
     keep_running = session_status == "running"
     summary["phase"] = "profile" if keep_running else ("complete" if session_status == "ready" else "partial")
+    if preserve_execution_failure(summary, "ready") == "failed":
+        summary["phase"] = "failed"
     summary["progress"] = progress
     (update_session_fn or _update_session)(
         conn,
@@ -543,7 +546,17 @@ def _update_session(
     # 放在这里才能保证「本次结果:本地 N 人 / 新发现 M 人」永远与库里的行一致——
     # 一次搜索会分多批(召回 / 发现墙 / 在线严格)各调一次 record_items,若只统计
     # 当批写入的行,后一批会把前一批的数字盖掉。
-    persisted_summary = dict(_dict(summary))
+    row = conn.execute(
+        "SELECT status, result_summary_json FROM vkpi_kol_search_sessions WHERE id=? FOR NO KEY UPDATE",
+        (int(session_id),),
+    ).fetchone()
+    existing = _dict(_loads(dict(row).get("result_summary_json"), {})) if row else {}
+    if not permits_write(existing, session_id, resolve_fence(session_id)):
+        return
+    persisted_summary = retain_execution_observation(existing, _dict(summary))
+    status = preserve_execution_failure(persisted_summary, status)
+    if status == "failed" and preserve_execution_failure(existing, "ready") == "failed":
+        persisted_summary["phase"] = "failed"
     persisted_summary["origin_breakdown"] = session_origin_breakdown(conn, int(session_id))
     # 完成度同理,从行里现算,不留可漂的快照。``status`` 只有 partial 一个词,盖住了
     # 「0 条结果」到「29/30 已完成」的整个区间;线上 104 个 partial 会话里既有 13 个
@@ -741,6 +754,9 @@ def record_items(
     update_session_fn: UpdateSession | None = None,
 ) -> dict[str, Any]:
     conn = (get_conn_fn or get_conn)()
+    if not locked_write_allowed(conn, session_id):
+        conn.commit()
+        return {**superseded_result(session_id), "items": [], "items_written": 0}
     existing = conn.execute(
         "SELECT id FROM vkpi_kol_search_sessions WHERE id=?",
         (int(session_id),),

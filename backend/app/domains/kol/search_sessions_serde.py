@@ -14,6 +14,8 @@ from typing import Any
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from app.core.coerce import _loads, _text
+from app.domains.kol.search_session_lane_counts import sanitize_payload_with_lane_counts
+from app.domains.kol.query_cell_coverage_projection import sanitize_with_query_cell_coverage
 from app.domains.kol.search_sessions_schema import (
     ITEM_STATUSES,
     SESSION_QUERY_TYPES,
@@ -642,8 +644,7 @@ def _sanitize_session_value(value: Any, *, field_name: str = "") -> Any:
 
 
 def _sanitize_session_payload(value: Any) -> dict[str, Any]:
-    sanitized = _sanitize_session_value(_dict(value))
-    return sanitized if isinstance(sanitized, dict) else {}
+    return sanitize_with_query_cell_coverage(value, lambda source: sanitize_payload_with_lane_counts(source, _sanitize_session_value))
 
 
 _SESSION_INPUT_FIELDS = {

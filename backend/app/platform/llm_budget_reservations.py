@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.core.config import IS_PRODUCTION
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.costs.budget_window_roll import roll_budget_window
@@ -31,6 +32,7 @@ _SINGLE_CALL_SCOPE = "single_call"
 _MONTHLY_SCOPE = "monthly_total"
 _USD_QUANTUM = Decimal("0.000001")
 _MICRO_USD_PER_USD = Decimal("1000000")
+LOCAL_QUERY_EVALUATION_COST_SCOPE = "cron:kol_live_query_eval"
 _PROGRESS_METADATA_KEYS = frozenset(
     {
         "surface",
@@ -330,6 +332,20 @@ def _maybe_reap_stale_reservations() -> None:
         logger.debug("vkpi.llm_reservations.reap_failed", exc_info=True)
 
 
+def _validate_local_evaluation_no_reap(
+    requested: bool, *, cost_scope: str, require_cost_scope: bool,
+) -> None:
+    """The local evaluation option suppresses housekeeping, never budget gates."""
+    if requested is False:
+        return
+    if requested is not True:
+        raise LlmBudgetBlocked("local_evaluation_no_reap_flag_invalid")
+    if IS_PRODUCTION:
+        raise LlmBudgetBlocked("local_evaluation_forbidden_in_production")
+    if require_cost_scope is not True or cost_scope != LOCAL_QUERY_EVALUATION_COST_SCOPE:
+        raise LlmBudgetBlocked("local_evaluation_budget_scope_required", scope=cost_scope)
+
+
 def reserve_llm_budget(
     *,
     provider: str,
@@ -339,11 +355,18 @@ def reserve_llm_budget(
     estimated_cost_usd: Decimal | float | str,
     cost_scope: str = "",
     require_cost_scope: bool = False,
+    local_evaluation_no_reap: bool = False,
     metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
     triggered_by: Any = None,
 ) -> LlmBudgetReservation:
-    """Atomically reserve configured core LLM allowance or fail closed."""
+    """Atomically reserve configured core LLM allowance or fail closed.
+
+    The narrow local-evaluation flag prevents this request from expiring any
+    historical reservation as incidental housekeeping. It does not disable
+    scope locks, positive estimates, cumulative/open-reservation accounting,
+    normal window rollover, or settlement. Existing callers retain reaping.
+    """
 
     provider_key = str(provider or "").strip().lower()
     model_name = str(model or "").strip()
@@ -361,6 +384,15 @@ def reserve_llm_budget(
         raise LlmBudgetBlocked(reason, estimated_cost_usd=0.0) from exc
     provider_budget_scope = _provider_scope(provider_key)
     clean_cost_scope = str(cost_scope or "").strip().lower()
+    _validate_local_evaluation_no_reap(
+        local_evaluation_no_reap, cost_scope=clean_cost_scope,
+        require_cost_scope=require_cost_scope,
+    )
+    if local_evaluation_no_reap:
+        metadata = {
+            **(metadata or {}), "execution_class": "local_evaluation",
+            "claim_status": "descriptive_only",
+        }
     if not provider_key or not model_name:
         raise LlmBudgetBlocked("invalid_exact_model_binding", estimated_cost_usd=estimate)
     if estimate <= 0:
@@ -384,7 +416,8 @@ def reserve_llm_budget(
 
     # 2026-07-18:预约前机会式回收僵尸预约(节流 10 分钟),防 unknown 泄漏
     # 单调吃满 scope 日闸。独立事务,失败不阻断预约主流程。
-    _maybe_reap_stale_reservations()
+    if not local_evaluation_no_reap:
+        _maybe_reap_stale_reservations()
 
     request_hash = request_fingerprint(
         provider=provider_key,

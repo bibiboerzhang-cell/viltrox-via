@@ -4,7 +4,7 @@ compute-on-read 从既有沉淀里组装一个 KOL 的长期记忆来源 + 引�
 - 视频证据(vkpi_kol_video_evidence)→ 来自哪些视频
 - 深析记录(vkpi_kol_llm_deep_analysis_results)→ 分析过几次/最近一次(只引存在性/类型,绝不读 fit 值)
 - 项目/ROI(roi_aggregate)→ 合作过几个项目、ROI 几何
-- 推荐漏斗(vkpi_recommendation_outcomes)→ 是否认领/建项目/触达
+- 推荐运营记录(vkpi_recommendation_outcomes)→ 是否认领/建项目；通信事实保持未知
 让 Agent 建议能带 provenance(来自哪条视频/哪个项目),而非只看实时 query。
 红线:全程只读;绝不读写 viltrox_fit_score / llm_v6_fit;只引证据存在性,不臆造。
 """
@@ -14,6 +14,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains.recommendations.communication_evidence import communication_evidence
+from app.domains.recommendations.rerank_shadow import truthy
 
 logger = get_logger(__name__)
 
@@ -54,22 +56,24 @@ def get_kol_provenance(kol_pool_id: int, *, staff: dict[str, Any] | None = None,
         analyses_count = len(rows)
         latest_analysis = rows[0] if rows else None
 
-    outcomes: dict[str, Any] = {}
+    outcomes: dict[str, Any] = {
+        "outreach_sent": None, "reply_received": None,
+        "communication_evidence": communication_evidence(),
+    }
     if table_exists("vkpi_recommendation_outcomes"):
         rows = _rows(
-            "SELECT was_claimed, project_created, outreach_sent, content_published, agreement_reached "
+            "SELECT was_claimed, project_created, content_published, agreement_reached "
             "FROM vkpi_recommendation_outcomes WHERE kol_pool_id = ?",
             (kid,),
         )
         if rows:
-            outcomes = {
+            outcomes.update({
                 "records": len(rows),
-                "claimed": sum(1 for r in rows if r.get("was_claimed")),
-                "project_created": sum(1 for r in rows if r.get("project_created")),
-                "outreach_sent": sum(1 for r in rows if r.get("outreach_sent")),
-                "content_published": sum(1 for r in rows if r.get("content_published")),
-                "agreement_reached": sum(1 for r in rows if r.get("agreement_reached")),
-            }
+                "claimed": sum(1 for r in rows if truthy(r.get("was_claimed"))),
+                "project_created": sum(1 for r in rows if truthy(r.get("project_created"))),
+                "content_published": sum(1 for r in rows if truthy(r.get("content_published"))),
+                "agreement_reached": sum(1 for r in rows if truthy(r.get("agreement_reached"))),
+            })
 
     roi: dict[str, Any] = {}
     try:
@@ -112,5 +116,5 @@ def get_kol_provenance(kol_pool_id: int, *, staff: dict[str, Any] | None = None,
             "roi": roi,
         },
         "citations": citations,
-        "note": "记忆 provenance 只读组装,只引证据存在性;绝不读写 viltrox_fit_score。",
+        "note": "记忆 provenance 只读组装；运营记录不是供应商发送/回复证明，通信待核；不验证KOL精准度或算法效果。",
     }

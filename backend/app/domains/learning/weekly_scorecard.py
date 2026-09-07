@@ -10,7 +10,7 @@
 裁决时间列(2026-07-06 真库侦察,真列名,全部按事件真实发生时刻分桶):
   kol_recommend  vkpi_recommendation_outcomes:outcome_finalized_at 全空、first_action_at
                  仅 2 行非空 → 采用「正向节点各自的 *_at」(shortlisted_at/claimed_at/
-                 outreach_sent_at/reply_at/agreement_at/content_published_at/first_order_at)
+                 agreement_at/content_published_at/first_order_at;未核验收发位与时间剔除)
                  取最早者;负向用 rejected_at;链式回落 outcome_finalized_at →
                  first_action_at → 反馈 created_at → recommended_at。
   market_bet     vkpi_bet_ledger.updated_at(复盘写回时刻)→ review_at → created_at。
@@ -35,6 +35,9 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.recommendations.communication_evidence import (
+    COMMUNICATION_NODES, LABEL_SEMANTICS, communication_evidence, project_outcome_communications,
+)
 
 logger = get_logger(__name__)
 
@@ -88,7 +91,7 @@ _EXEC_HIT = _pl_attr("_EXEC_HIT", frozenset({"success", "succeeded", "ok", "done
 _EXEC_MISS = _pl_attr("_EXEC_MISS", frozenset({"failed", "failure", "error", "timeout"}))
 
 # kol_recommend 正向节点 → 该节点的真实裁决时间列(2026-07-06 侦察真列名)
-_POSITIVE_EVENT_TS: tuple[tuple[str, str], ...] = (
+_POSITIVE_EVENT_TS: tuple[tuple[str, str], ...] = tuple(pair for pair in (
     ("was_shortlisted", "shortlisted_at"),
     ("was_claimed", "claimed_at"),
     ("outreach_sent", "outreach_sent_at"),
@@ -96,7 +99,7 @@ _POSITIVE_EVENT_TS: tuple[tuple[str, str], ...] = (
     ("agreement_reached", "agreement_at"),
     ("content_published", "content_published_at"),
     ("order_attributed", "first_order_at"),
-)
+) if pair[0] not in COMMUNICATION_NODES)
 
 
 # ── 时间小工具 ────────────────────────────────────────────────────────
@@ -338,10 +341,10 @@ def _pending_item(
 def _weekly_kol_recommend(conn: Any, axis: list[dict[str, str]], pending_out: list[dict[str, Any]]) -> dict[str, Any]:
     label = "KOL 推荐"
     basis = (
-        "正向=各节点真实时间列(shortlisted_at/claimed_at/outreach_sent_at/reply_at/agreement_at/"
+        "正向=非通信运营/业务节点时间列(shortlisted_at/claimed_at/agreement_at/"
         "content_published_at/first_order_at 取最早);负向=rejected_at;"
         "回落 outcome_finalized_at → first_action_at → 反馈 created_at → recommended_at"
-        "(侦察:outcome_finalized_at 全空、first_action_at 仅 2 行)"
+        "；未核验 outreach_sent/reply_received 及其时间不参与裁决"
     )
     try:
         fb_rows = conn.execute(
@@ -374,7 +377,7 @@ def _weekly_kol_recommend(conn: Any, axis: list[dict[str, str]], pending_out: li
         judged: list[dict[str, Any]] = []
         pending = 0
         for raw in rows:
-            row = dict(raw)
+            row = project_outcome_communications(raw) or {}
             rec_id = int(row.get("recommendation_id") or 0)
             types = fb_types.get(rec_id, set())
             positive_event_times = [
@@ -403,12 +406,13 @@ def _weekly_kol_recommend(conn: Any, axis: list[dict[str, str]], pending_out: li
                            + " 推荐已展示,无任何业务节点/反馈对答案",
                     since=_parse_dt(row.get("recommended_at")),
                 ))
-        return _group_result(
+        result = _group_result(
             action_type="kol_recommend", label=label, axis=axis, judged=judged,
             pending_count=pending, judged_time_basis=basis, scanned=len(rows),
         )
     except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级
-        return _error_group("kol_recommend", label, axis, exc)
+        result = _error_group("kol_recommend", label, axis, exc)
+    return {**result, "label_semantics": LABEL_SEMANTICS, "communication_evidence": communication_evidence()}
 
 
 def _weekly_market_bet(conn: Any, axis: list[dict[str, str]], pending_out: list[dict[str, Any]]) -> dict[str, Any]:

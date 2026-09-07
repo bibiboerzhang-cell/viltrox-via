@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from app.domains.kol.profile_follower_filter import FOLLOWERS_UNKNOWN_PENDING
+from app.domains.kol.profile_discovery_time_gate import discovery_time_gate
 from app.domains.kol.profile_recall_activity_gate import (
     activity_gate_evidence,
     evaluate_activity,
@@ -54,6 +55,9 @@ class CandidateGatePolicy:
     max_video_age_days: int
     fresh_priority_days: int
     gate_schema: str
+    language_mode: str = "require"
+    geo_constraints: dict[str, Any] = field(default_factory=dict)
+    provider_discovery_policy: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,8 @@ class CandidateGateHooks:
     account_quality_verdict: Callable[[dict[str, Any], dict[str, Any]], str]
     market_resolution: Callable[[dict[str, Any]], dict[str, Any]]
     identity_aliases: Callable[[dict[str, Any]], Any] | None = None
+    creator_country_resolution: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    audience_market_resolution: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
 
 def _new_funnel() -> dict[str, int]:
@@ -207,6 +213,32 @@ def _activity_gate(evidence: dict[str, Any], policy: CandidateGatePolicy) -> dic
 
 
 def _market_gate(row: dict[str, Any], policy: CandidateGatePolicy, hooks: CandidateGateHooks) -> dict[str, Any]:
+    dimensions = []
+    for field_name, reason_prefix, resolver in (
+        ("creator_countries", "creator_country", hooks.creator_country_resolution),
+        ("audience_markets", "audience_market", hooks.audience_market_resolution),
+    ):
+        targets = {str(value).lower() for value in policy.geo_constraints.get(field_name, [])}
+        if not targets:
+            continue
+        proof = resolver(row) if resolver else {}
+        value = str(proof.get("market") or "").lower()
+        values = {str(item).lower() for item in proof.get("markets", []) if isinstance(item, str)} or ({value} if value else set())
+        mode_key = "creator_mode" if field_name == "creator_countries" else "audience_mode"
+        mode = policy.geo_constraints.get(mode_key, "require")
+        matches = bool(values.intersection(targets))
+        permitted = (not matches) if mode == "exclude" else matches or (mode == "include_unknown" and not value)
+        state = "unknown" if not value else "verified" if permitted else "contradicted"
+        passed = mode in {"require", "include_unknown", "exclude"} and permitted
+        dimensions.append({"dimension": reason_prefix, "targets": sorted(targets),
+                           "value": value or None, "values": sorted(values), "status": state, "mode": mode,
+                           "passed": passed, "proof": proof})
+    if dimensions:
+        failed = next((item for item in dimensions if not item["passed"] and item["status"] == "contradicted"), None)
+        failed = failed or next((item for item in dimensions if not item["passed"]), None)
+        reason = (failed["dimension"] + ("_unknown" if failed["status"] == "unknown" else "_mismatch")) if failed else ""
+        resolution = {"market": dimensions[0]["value"] or "", "method": "separate_geo_evidence", "dimensions": dimensions}
+        return {"resolution": resolution, "value": resolution["market"], "method": "separate_geo_evidence", "passed": failed is None, "reason": reason}
     market = hooks.market_resolution(row)
     value = str(market.get("market") or "")
     passed = bool(value) if policy.require_trusted_market else True
@@ -234,8 +266,14 @@ def _language_gate(
 ) -> dict[str, Any]:
     resolution = resolve_candidate_language(row, item, normalize=normalize_operator_languages)
     values = list(resolution["values"])
+    matches = bool(policy.target_languages.intersection(values))
+    permitted = matches
+    if policy.language_mode == "exclude":
+        permitted = not matches
+    elif policy.language_mode == "include_unknown":
+        permitted = matches or not values
     passed = not policy.invalid_languages and (
-        not policy.language_requested or bool(policy.target_languages.intersection(values))
+        not policy.language_requested or permitted
     )
     if passed:
         reason = ""
@@ -373,15 +411,16 @@ def _gate_evidence(
                 else {}
             ),
             "passed": market["passed"],
+            **({"dimensions": market_resolution["dimensions"]} if "dimensions" in market_resolution else {}),
         },
-        "language": language_gate_evidence(
+        "language": {**language_gate_evidence(
             language["resolution"],
             targets=sorted(policy.target_languages),
             filter_requested=policy.language_requested,
             invalid_targets=list(policy.invalid_languages),
             passed=language["passed"],
             self_source=policy.evidence_sources.get("language") or LANGUAGE_SELF_REPORTED_SOURCE,
-        ),
+        ), "mode": policy.language_mode, "value_status": "known" if language["values"] else "unknown"},
         "profile_type": {
             "values": profile_type["values"],
             "targets": sorted(policy.target_profile_types),
@@ -525,6 +564,13 @@ def _evaluate_candidate(
     if not platform["passed"]:
         reasons.append(platform["reason"])
 
+    discovery_window = discovery_time_gate(evidence, policy=policy.provider_discovery_policy, now=policy.now)
+    if discovery_window is not None:
+        _record_unique_stage(result, "discovery_window_pass", aliases,
+                             not reasons, discovery_window["passed"])
+    if discovery_window and not discovery_window["passed"]:
+        reasons.append(discovery_window["reason"])
+
     _claim_final_identity(
         reasons=reasons,
         aliases=aliases,
@@ -550,6 +596,8 @@ def _evaluate_candidate(
         policy=policy,
     )
     item["qualification_evidence"] = gate_evidence
+    if discovery_window is not None:
+        gate_evidence["discovery_window"] = discovery_window
     result.audit.append(gate_evidence)
 
     if reasons:
@@ -574,6 +622,9 @@ def evaluate_candidate_pool(
 ) -> CandidateGateResult:
     """Evaluate every candidate before quota/limit selection."""
     result = CandidateGateResult()
+    if policy.provider_discovery_policy is not None:
+        result.funnel["discovery_window_pass"] = 0
+        result.stage_identities["discovery_window_pass"] = set()
     candidates = [*buckets.get("creator", []), *buckets.get("reviewer", [])]
     result.funnel["candidates_evaluated"] = len(candidates)
     for item in candidates:

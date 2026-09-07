@@ -35,16 +35,22 @@ class SmartKolInputPollingContractTests(unittest.TestCase):
                 self.assertIn(f'"{status}"', body)
 
     def test_polling_waits_for_required_tasks_or_terminal_grace_and_refreshes_history(self) -> None:
-        self.assertIn("const progress = searchSessionProgress(session);", self.source)
-        self.assertIn("if (progress.requiredTasksComplete)", self.source)
-        self.assertIn("Date.now() - terminalSince >= 30000", self.source)
-        self.assertNotIn("haveDiscovery || graceUsedUp", self.source)
+        self.assertIn("progress = searchSessionProgress(session);", POLLING_SOURCE)
+        self.assertIn("progress = appliedProgress ?? searchSessionProgress(session);", POLLING_SOURCE)
+        # A confirmed orchestration interruption stops observation without
+        # falsely claiming that unresolved provider/child tasks completed.
+        self.assertIn(
+            "if (progress.observationTerminal || progress.requiredTasksComplete)",
+            POLLING_SOURCE,
+        )
+        self.assertIn("Date.now() - terminalSince >= 30000", POLLING_SOURCE)
+        self.assertNotIn("haveDiscovery || graceUsedUp", POLLING_SOURCE)
         # Polling completion must stop only the transport loop.  The displayed
         # session remains bound so terminal results can still be approved.
-        self.assertIn("setPollingSearchSessionId(null);", self.source)
-        self.assertNotIn("setActiveSearchSessionId(null);", self.source)
-        self.assertIn("结果已更新", self.source)
-        self.assertIn("void refreshHistory();", self.source)
+        self.assertIn("setPollingSearchSessionId(null);", POLLING_SOURCE)
+        self.assertNotIn("setActiveSearchSessionId(null);", POLLING_SOURCE)
+        self.assertIn("结果已更新", POLLING_SOURCE)
+        self.assertIn("void refreshHistory();", POLLING_SOURCE)
 
     def test_polling_merges_sparse_snapshots_per_kol_and_reports_stage_progress(self) -> None:
         self.assertIn("mergeKolSearchSessionSnapshots(prev, session)", self.source)

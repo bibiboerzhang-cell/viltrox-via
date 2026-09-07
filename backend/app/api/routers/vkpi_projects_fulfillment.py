@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains.projects import retrospective_aggregate
@@ -252,7 +252,7 @@ def request_shipping_approval(
     """成员请求发货(进 pending 待管理员人审)。"""
     from app.domains.projects import shipment_approval
 
-    return shipment_approval.request_approval(project_id, kol_pool_id, staff=staff, reason=str((body or {}).get("reason") or ""))
+    return _shipping_approval_call(shipment_approval.request_approval, project_id, kol_pool_id, staff, body)
 
 
 @router.post("/projects/{project_id}/kols/{kol_pool_id}/shipping/approve")
@@ -265,7 +265,7 @@ def approve_shipping(
     """管理层通过发货(非管理层 → admin_only)。"""
     from app.domains.projects import shipment_approval
 
-    return shipment_approval.approve(project_id, kol_pool_id, staff=staff, reason=str((body or {}).get("reason") or ""))
+    return _shipping_approval_call(shipment_approval.approve, project_id, kol_pool_id, staff, body)
 
 
 @router.post("/projects/{project_id}/kols/{kol_pool_id}/shipping/reject")
@@ -278,7 +278,20 @@ def reject_shipping(
     """管理层驳回发货。"""
     from app.domains.projects import shipment_approval
 
-    return shipment_approval.reject(project_id, kol_pool_id, staff=staff, reason=str((body or {}).get("reason") or ""))
+    return _shipping_approval_call(shipment_approval.reject, project_id, kol_pool_id, staff, body)
+
+
+def _shipping_approval_call(operation, project_id, kol_pool_id, staff, body):
+    from app.domains.access.scope import ScopeDenied
+
+    try:
+        return operation(project_id, kol_pool_id, staff=staff, reason=str((body or {}).get("reason") or ""))
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/projects/{project_id}/content-posts/advance-retrospective")

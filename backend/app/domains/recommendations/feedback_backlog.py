@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.recommendations.communication_evidence import communication_evidence, project_outcome_communications
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
@@ -17,8 +18,6 @@ OUTCOME_FLAGS = (
     ("was_rejected", "rejected"),
     ("was_claimed", "claimed"),
     ("project_created", "project_created"),
-    ("outreach_sent", "outreach_sent"),
-    ("reply_received", "reply_received"),
     ("agreement_reached", "agreement_reached"),
     ("content_published", "content_published"),
     ("order_attributed", "order_attributed"),
@@ -94,9 +93,11 @@ def _evidence_text(value: Any) -> str:
 
 
 def _outcome_status(row: dict[str, Any]) -> dict[str, Any]:
+    row = project_outcome_communications(row) or {}
     flags = [label for column, label in OUTCOME_FLAGS if _truthy(row.get(column))]
     first_action_at = str(row.get("first_action_at") or "")
     return {
+        "communication_evidence": communication_evidence(),
         "has_outcome": bool(flags),
         "flags": flags,
         "first_action_at": first_action_at,
@@ -122,7 +123,7 @@ def _suggestion(row: dict[str, Any], outcome: dict[str, Any]) -> dict[str, Any]:
         suggested_feedback_type = "shortlist"
         confidence = 0.9 if "shortlisted" in flags else 0.75
         reasons.append("recommendation_has_shortlist_outcome" if "shortlisted" in flags else "recommendation_status_shortlisted")
-    elif flags.intersection({"claimed", "project_created", "outreach_sent", "reply_received", "agreement_reached", "content_published", "order_attributed"}):
+    elif flags.intersection({"claimed", "project_created", "agreement_reached", "content_published", "order_attributed"}):
         suggested_action = "review_positive_business_signal"
         suggested_feedback_type = "positive_signal"
         confidence = 0.75
@@ -244,8 +245,8 @@ def _missing_feedback_rows(*, run_uid: str = "", limit: int = 100) -> list[dict[
           MAX(CASE WHEN o.was_rejected THEN 1 ELSE 0 END) AS was_rejected,
           MAX(CASE WHEN o.was_claimed THEN 1 ELSE 0 END) AS was_claimed,
           MAX(CASE WHEN o.project_created THEN 1 ELSE 0 END) AS project_created,
-          MAX(CASE WHEN o.outreach_sent THEN 1 ELSE 0 END) AS outreach_sent,
-          MAX(CASE WHEN o.reply_received THEN 1 ELSE 0 END) AS reply_received,
+          NULL AS outreach_sent,
+          NULL AS reply_received,
           MAX(CASE WHEN o.agreement_reached THEN 1 ELSE 0 END) AS agreement_reached,
           MAX(CASE WHEN o.content_published THEN 1 ELSE 0 END) AS content_published,
           MAX(CASE WHEN o.order_attributed THEN 1 ELSE 0 END) AS order_attributed,

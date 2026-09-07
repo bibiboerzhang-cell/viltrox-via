@@ -8,6 +8,7 @@ from typing import Any
 from app.db.connection import PostgresCompatConnection, get_conn
 from app.domains.access import scope
 from app.domains.projects import workflow_project_create
+from app.domains.projects import shipment_write_guard as shipping_guard
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow_common import (
     PROJECT_STAGES,
@@ -333,7 +334,7 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     conn = get_conn()
-    row = conn.execute("SELECT * FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
+    row = shipping_guard.lock_row(conn, "vkpi_projects", project_id)
     if not row:
         raise LookupError("project not found")
     now = utcnow()
@@ -389,20 +390,11 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
         metadata_changed = True
     if metadata_changed:
         updates["metadata_json"] = _json(metadata)
-
-    # P2:note 是契约里的死字段(vkpi_projects 无对应列)。收到时落一条业务 audit,
-    # 不再静默丢弃;不阻塞主更新流程(_log_project_audit 自身 best-effort)。
-    note = str(body.get("note") or "").strip()
-    if note:
-        _log_project_audit(
-            staff=staff,
-            action_type="project_update_note",
-            project_id=int(project_id),
-            detail=note[:240],
-            metadata={"note": note[:2000]},
-        )
+    shipping_guard.guard_project_change(conn, row, updates, staff=staff)
 
     if not updates:
+        conn.commit()
+        _log_update_note(project_id, body, staff=staff)
         return {"id": int(project_id), "status": "unchanged"}
 
     updates["updated_at"] = now
@@ -412,6 +404,8 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
         (*updates.values(), int(project_id)),
     )
     conn.commit()
+    # Audit may commit the shared connection: never release approval locks before the write.
+    _log_update_note(project_id, body, staff=staff)
     _log_project_audit(
         staff=staff,
         action_type="project_update",
@@ -426,6 +420,15 @@ def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, An
     if "follow_status" in updates:
         result["follow_status"] = updates["follow_status"]
     return result
+
+
+def _log_update_note(project_id: int, body: dict[str, Any], *, staff: Any = None) -> None:
+    note = str(body.get("note") or "").strip()
+    if note:
+        _log_project_audit(
+            staff=staff, action_type="project_update_note", project_id=int(project_id),
+            detail=note[:240], metadata={"note": note[:2000]},
+        )
 
 
 # KOL availability + attach operations moved to workflow_projects_kols.py
@@ -450,7 +453,7 @@ def transition_project(
     if to_stage not in PROJECT_STAGES:
         raise ValueError("unsupported stage")
     conn = get_conn()
-    row = conn.execute("SELECT * FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
+    row = shipping_guard.lock_row(conn, "vkpi_projects", project_id)
     if not row:
         raise LookupError("project not found")
     now = utcnow()
@@ -463,6 +466,7 @@ def transition_project(
     sample_status = str(body.get("sample_status") or metadata.get("sample_status") or row["sample_status"] or "")
     if to_stage == "shipped":
         sample_status = sample_status or "shipped"
+    shipping_guard.guard_project_change(conn, row, {"stage": to_stage, "sample_status": sample_status, "tracking_number": tracking_number}, staff=staff)
     closed_at = now if to_stage in TERMINAL_STAGES else row["closed_at"]
     conn.execute(
         """

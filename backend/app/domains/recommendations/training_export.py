@@ -21,6 +21,8 @@ from app.db.connection import get_conn
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 from app.domains.recommendations import feature_store
 from app.domains.recommendations import outcomes as outcome_collector
+from app.domains.recommendations.communication_evidence import LABEL_SEMANTICS, LABEL_SEMANTICS_VERSION, project_outcome_communications
+from app.domains.recommendations.rerank_fit import label_for_outcome
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -249,6 +251,7 @@ _OUTCOME_KEYS = frozenset(
         "reply_received",
         "agreement_reached",
         "content_published",
+        "order_attributed",
         "attributed_clicks",
         "attributed_orders",
         "attributed_gmv_cents",
@@ -265,6 +268,7 @@ def _dataset_record(row: dict[str, Any], features: dict[str, Any], lineage: dict
         for key, value in row.items()
         if key.startswith("was_") or key in _OUTCOME_KEYS
     }
+    label, nodes = label_for_outcome(outcome, recommended_at=lineage["as_of"])
     return {
         "dataset_schema_version": DATASET_SCHEMA_VERSION,
         "recommendation_id": lineage["recommendation_id"],
@@ -281,7 +285,10 @@ def _dataset_record(row: dict[str, Any], features: dict[str, Any], lineage: dict
         "feature_snapshot": features,
         "feature_lineage": lineage,
         "scoring_breakdown": _loads(row.get("recommendation_scoring_breakdown_json"), {}),
-        "outcome": outcome,
+        "outcome": project_outcome_communications(outcome),
+        "label_semantics": LABEL_SEMANTICS,
+        "training_label": {"eligible": label is not None, "value": label, "nodes": nodes,
+                           "label_semantics_version": LABEL_SEMANTICS_VERSION},
         "outcome_finalized_at": row.get("outcome_finalized_at"),
     }
 
@@ -355,6 +362,9 @@ def build_point_in_time_training_dataset(
         "field_contract": {
             "model_feature_path": "feature_snapshot",
             "label_path": "outcome",
+            "training_eligibility_path": "training_label.eligible",
+            "training_value_path": "training_label.value",
+            "label_eligibility_required": True,
             "provenance_path": "feature_lineage",
             "excluded_from_model_features": [
                 "recommendation_id",
@@ -369,6 +379,8 @@ def build_point_in_time_training_dataset(
                 "scoring_breakdown",
                 "outcome",
                 "outcome_finalized_at",
+                "label_semantics",
+                "training_label",
             ],
         },
         "source_versions": {

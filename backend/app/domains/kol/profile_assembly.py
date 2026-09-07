@@ -68,6 +68,8 @@ def build_contacts(kol: dict[str, Any], contact_links: Any, contact_raw: Any) ->
 
 
 def build_kpi_summary(kpi_ledger: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from app.shared.vkpi_kpi_communication_truth import project_kpi_metric_summary
+
     kpi_grouped: dict[str, dict[str, Any]] = {}
     for item in kpi_ledger:
         metric_key = str(item.get("metric_key") or "unknown")
@@ -82,7 +84,9 @@ def build_kpi_summary(kpi_ledger: list[dict[str, Any]]) -> list[dict[str, Any]]:
             },
         )
         try:
-            bucket["total_value"] = float(bucket["total_value"]) + float(item.get("metric_value") or 0)
+            # Keep historical totals only for audit; the final projection decides eligibility.
+            recorded = item.get("recorded_metric_value", item.get("metric_value"))
+            bucket["total_value"] = float(bucket["total_value"]) + float(recorded or 0)
         except (TypeError, ValueError):
             pass
         bucket["row_count"] = int(bucket["row_count"]) + 1
@@ -90,7 +94,9 @@ def build_kpi_summary(kpi_ledger: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if ledger_date >= str(bucket.get("latest_ledger_date") or ""):
             bucket["latest_ledger_date"] = ledger_date
             bucket["latest_source_ref"] = item.get("source_ref") or ""
-    return sorted(kpi_grouped.values(), key=lambda item: str(item.get("metric_key") or ""))
+    return [project_kpi_metric_summary(item) for item in sorted(
+        kpi_grouped.values(), key=lambda item: str(item.get("metric_key") or ""),
+    )]
 
 
 def build_profile_summary(

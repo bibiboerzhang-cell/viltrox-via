@@ -400,7 +400,7 @@ def build_discovery_funnel(
     return funnel
 
 
-def record_search_diagnostics(session_id: int, patch: dict[str, Any]) -> dict[str, Any]:
+def record_search_diagnostics(session_id: int, patch: dict[str, Any], *, lane_only: bool = False) -> dict[str, Any]:
     """把诊断并进会话 ``result_summary``(merge patch,保留会话既有状态)。
 
     必须在本次 ``attach_*`` 之后调用:``attach_recall_result`` / ``record_items`` 是整块
@@ -413,6 +413,13 @@ def record_search_diagnostics(session_id: int, patch: dict[str, Any]) -> dict[st
     try:
         from app.db.connection import get_conn
         from app.domains.kol import search_sessions
+
+        if lane_only:
+            from app.domains.kol.search_sessions_lanes import write_diagnostics_patch
+            conn = get_conn()
+            write_diagnostics_patch(conn, int(session_id), safe_patch)
+            conn.commit()
+            return {"status": "recorded", "keys": sorted(safe_patch)}
 
         # 只读一列 status:诊断不该为了拿状态去跑整套 get_session 投影(项/预览/展示闸)。
         row = get_conn().execute(

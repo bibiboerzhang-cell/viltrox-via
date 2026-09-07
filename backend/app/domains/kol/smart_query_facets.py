@@ -40,7 +40,7 @@ from typing import Any
 
 from app.core.coerce import _text
 from app.core.logging import get_logger
-from app.domains.kol.pool_common import COUNTRY_CODE_ALIASES
+from app.domains.kol.search_geo_intent import resolve_geo_intent
 from app.domains.kol.profile_recall_filter_modes import TRI_STATE_MODES, normalize_mode
 from app.domains.kol.profile_recall_precision import explicit_platforms_from_query
 from app.domains.kol.profile_vertical_lexicon import VERTICAL_KEYS, VERTICAL_LABELS_ZH
@@ -110,20 +110,6 @@ def _has_cjk(text: str) -> bool:
     return any("一" <= ch <= "鿿" for ch in text)
 
 
-#: 国家别名表直接复用 ``pool_common.COUNTRY_CODE_ALIASES`` —— 与硬筛端
-#: ``_country_match_key`` 同一套口径,不另造第二张表(第二张表迟早漂移)。
-_COUNTRY_MATCHERS: tuple[tuple[str, str, bool], ...] = tuple(
-    sorted(
-        ((alias, code, _has_cjk(alias)) for alias, code in COUNTRY_CODE_ALIASES.items()),
-        key=lambda item: len(item[0]),
-        reverse=True,
-    )
-)
-_CITY_COUNTRY_MATCHERS: tuple[tuple[str, str, bool], ...] = (
-    ("london", "GB", False), ("伦敦", "GB", True),
-    ("atlanta", "US", False), ("亚特兰大", "US", True),
-)
-
 #: 操作员会怎么**说**语言(与数据侧的取值别名刻意分开:这里是人话,那里是字段值)。
 _LANGUAGE_PHRASES: tuple[tuple[str, str], ...] = (
     ("english", "en"), ("英语", "en"), ("英文", "en"),
@@ -172,29 +158,15 @@ _FOCUS_VERTICAL_HINTS: tuple[tuple[str, str], ...] = (
 )
 
 #: 「别按这个筛」的明确表态。命中即:该项**明确为空**且锁死 —— 模型和自动松绑都不许再往里塞。
-_NO_COUNTRY_PHRASES: tuple[str, ...] = (
-    "不限国家", "不限地区", "不分国家", "全球", "全世界", "worldwide", "global", "any country",
-)
 _NO_LANGUAGE_PHRASES: tuple[str, ...] = (
     "不限语言", "不分语言", "任何语言", "any language", "all languages",
 )
 
 
 def _explicit_countries(query: str) -> tuple[list[str], list[str]]:
-    """操作员**原话**里点名的国家。返回 ``(ISO-2 列表, 命中的原话)``。"""
-    lowered = _text(query).lower()
-    if not lowered:
-        return [], []
-    codes: list[str] = []
-    matched: list[str] = []
-    for alias, code, is_cjk in (*_COUNTRY_MATCHERS, *_CITY_COUNTRY_MATCHERS):
-        hit = alias in lowered if is_cjk else re.search(_ascii_boundary(alias), lowered) is not None
-        if not hit:
-            continue
-        matched.append(alias)
-        if code not in codes:
-            codes.append(code)
-    return codes, matched[:4]
+    """只取作者所在地;受众市场、拍摄地、未知和歧义不能变成作者国家。"""
+    geo = resolve_geo_intent(query)
+    return list(geo["creator_countries"]), list(geo["evidence"]["creator_countries"])[:4]
 
 
 def _explicit_languages(query: str) -> tuple[list[str], list[str]]:
@@ -297,11 +269,18 @@ def _facet(
 
 
 def _countries_facet(query: str, plan: dict[str, Any], model: dict[str, Any]) -> dict[str, Any]:
-    said_no = _said_no_filter(query, _NO_COUNTRY_PHRASES)
-    if said_no:
+    geo = resolve_geo_intent(query)
+    if geo["creator_status"] == "ambiguous":
+        return {
+            **_facet("countries", [], origin=ORIGIN_EXPLICIT, source=SOURCE_OPERATOR,
+                     evidence="作者所在地存在未解决的地域条件", note="请确认作者所在地条件后再检索。"),
+            "requires_clarification": True,
+            "ambiguity_reasons": list(geo["ambiguity_reasons"]),
+        }
+    if geo["creator_status"] == "unrestricted":
         return _facet(
             "countries", [], origin=ORIGIN_EXPLICIT, source=SOURCE_OPERATOR,
-            evidence=f"你说了「{said_no}」", note="按你的要求不筛国家。",
+            evidence="你明确表示作者所在地不限", note="按你的要求不筛作者国家。",
         )
     explicit, matched = _explicit_countries(query)
     if explicit:
@@ -310,6 +289,11 @@ def _countries_facet(query: str, plan: dict[str, Any], model: dict[str, Any]) ->
             mode=COUNTRY_DEFAULT_MODE,
             evidence="你原话里写了「" + "、".join(matched) + "」",
             note="按你点名的国家筛;国家没填的人会被排除。",
+        )
+    if geo["audience_status"] != "unknown":
+        return _facet(
+            "countries", [], origin=ORIGIN_INFERRED, source=SOURCE_RULE,
+            evidence="受众市场不是作者所在地", note="你未指定作者所在地,不把受众市场当作者国家筛。",
         )
     from_model = _clean_codes(model.get("countries"), upper=True)
     if from_model:
@@ -347,9 +331,9 @@ def _languages_facet(query: str, plan: dict[str, Any], model: dict[str, Any]) ->
     if explicit:
         return _facet(
             "languages", explicit, origin=ORIGIN_EXPLICIT, source=SOURCE_OPERATOR,
-            mode=LANGUAGE_DEFAULT_MODE,
+            mode=LANGUAGE_EXPLICIT_MODE,
             evidence="你原话里写了「" + "、".join(matched) + "」",
-            note="按你点名的语言筛," + unknown_note,
+            note="按你点名的语言筛,仅已证实匹配的结果可通过;语言缺失的列为待核,不算已匹配。",
         )
     from_model = _clean_codes(model.get("languages"))
     if from_model:

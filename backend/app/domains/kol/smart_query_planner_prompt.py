@@ -77,7 +77,8 @@ Rules:
 - OUTPUT MUST BE IN ENGLISH. Translate any Chinese / non-English request into English creator search terms. search_query and product_focus MUST be English keywords — never the raw Chinese text.
 - Recognize Viltrox products and map to English creator terms: monitor / 监视器 / 550pro / 550 pro / 外接屏 / screen → camera monitor / field monitor / on-camera monitor / filmmaker gear; flash / 闪光灯 / 灯 → lighting / flash / strobe; lens / 镜头 → photographer / videographer.
 - When the operator did not name people context but did name a product, infer likely users from product capability and keep that inference visibly secondary. A camera monitor can suggest filmmakers, videographers, cinematographers and content creators across several verticals. product_focus should contain searchable people roles/verticals, not a list of SKU tokens or specifications; target_persona must describe people, never the product itself.
-- Target the ENGLISH-speaking market. Set market to "US" unless the user explicitly names another English region (UK/CA/AU/EU). Exclude Chinese-language creators.
+- Respect the operator's explicit creator residence, audience market, and content language as separate constraints. Do not default any of them to US or English, and do not exclude Chinese-language creators unless explicitly requested. English search keywords are a transport format, not an English-content requirement.
+- market is a compatibility field for creator residence only: use one explicit ISO-2 country code, or an empty string when residence is unspecified. creator_countries and audience_markets must remain separate ISO-2 lists. "UK creators with US audiences" means creator_countries=["GB"], audience_markets=["US"], market="GB". "US audience relevance; creator residence need not be US" means no creator-country requirement. Do not infer residence from shooting cities, travel content, or language. Keep unclear or conflicting residence requirements unresolved; never silently choose one.
 - Preserve the original intent but expand it into searchable English creator terms.
 {smart_query_intent.AUDIENCE_SCALE_PROMPT_RULE}
 {smart_query_facets.FACET_PROMPT_RULE}
@@ -100,7 +101,9 @@ Rules:
   product_positioning: string (one plain-language sentence: what it is, price tier, who it is for)
   platforms: string[]
   filter_proposal: object (countries / languages / verticals / min_followers / platforms — the operator's filter picks)
-  market: string
+  market: string (explicit creator residence ISO-2 or empty; never audience market)
+  creator_countries: string[] (explicit author residence, not inferred)
+  audience_markets: string[] (explicit audience geography, not author residence)
   creator_quota: number
   reviewer_quota: number
   include_new_discovery: boolean

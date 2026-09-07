@@ -5,6 +5,7 @@ import { InfoBlock } from '../shared/InfoBlock';
 import { currencyFormatter, numberFormatter } from '../shared/vkpiFormatters';
 import { coerceProjectStage, platformDisplay, platformFromRaw, safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { stageLabels } from '../shared/vkpiConstants';
+import { kpiValueLabel, workloadValueLabel } from './kpiValuePresentation';
 
 function auditActionLabel(value: string) {
   const labels: Record<string, string> = {
@@ -77,15 +78,17 @@ export function StaffProfileDrawer({
         <InfoBlock label="短链" value={numberFormatter.format(safeNumber(summary.link_count || summary.links_created))} />
         <InfoBlock label="销售额" value={currencyFormatter.format(safeNumber(summary.profile_revenue_cents || summary.gmv_cents) / 100)} />
         {costsVisible ? <InfoBlock label="成本" value={currencyFormatter.format(safeNumber(summary.profile_cost_cents || summary.cost_cents) / 100)} /> : null}
-        <InfoBlock label="工作量分" value={numberFormatter.format(safeNumber(summary.workload_score || summary.kpi_credit))} />
+        <InfoBlock label="工作量分" value={workloadValueLabel(summary)} />
+        {'operational_workload_score' in summary ? <InfoBlock label="非通信运营工作量" value={kpiValueLabel(summary.operational_workload_score)} /> : null}
         <InfoBlock label="KPI 来源" value={numberFormatter.format(safeNumber(summary.kpi_source_count || kpiBreakdown.source_count))} />
         <InfoBlock label="推荐来源" value={numberFormatter.format(safeNumber(summary.recommendation_kpi_source_count || recommendationKpiSources.length))} />
       </div>
       <div className="vkpi-evidence-list">
+        <p>待核验的历史收发与工作量记录不代表有效积分；历史账本保留，未在此扣分或补分。</p>
         <DetailList title="KPI 来源汇总" rows={kpiGrouped.slice(0, 16)} empty="暂无 KPI 来源汇总。">
           {(row) => (
             <article key={`staff-kpi-group-${String(row.metric_key || Math.random())}`}>
-              <div><strong>{textValue(row.metric_label || row.metric_key, '指标')}</strong><b>{numberFormatter.format(safeNumber(row.total_value))}</b></div>
+              <div><strong>{textValue(row.metric_label || row.metric_key, '指标')}</strong><b>{kpiValueLabel(row.total_value, row.aggregation_eligible)}</b></div>
               <p>来源 {numberFormatter.format(safeNumber(row.source_count))} 条 · {textValue(row.first_date, '-')} → {textValue(row.last_date, '-')}</p>
               <em>{String(row.is_recommendation_metric) === 'true' ? '来自产品分析推荐结果，可继续下钻到推荐 outcome。' : `confidence: ${textValue(row.confidence, '-')}`}</em>
             </article>
@@ -94,7 +97,7 @@ export function StaffProfileDrawer({
         <DetailList title="推荐 KPI 来源" rows={recommendationKpiGrouped.slice(0, 12)} empty="暂无推荐类 KPI 来源。">
           {(row) => (
             <article key={`staff-rec-kpi-${String(row.metric_key || Math.random())}`}>
-              <div><strong>{textValue(row.metric_label || row.metric_key, '推荐指标')}</strong><b>{numberFormatter.format(safeNumber(row.total_value))}</b></div>
+              <div><strong>{textValue(row.metric_label || row.metric_key, '推荐指标')}</strong><b>{kpiValueLabel(row.total_value, row.aggregation_eligible)}</b></div>
               <p>来源 {numberFormatter.format(safeNumber(row.source_count))} 条 · {textValue(row.first_date, '-')} → {textValue(row.last_date, '-')}</p>
               <em>该指标来自 `vkpi_recommendation_outcomes`，不会重复计入主销售额 / 成本。</em>
             </article>
@@ -107,7 +110,7 @@ export function StaffProfileDrawer({
             const entities = Array.isArray(sourceContext.entities) ? sourceContext.entities as Array<Record<string, unknown>> : [];
             return (
               <article key={`staff-kpi-source-${String(row.id || row.source_ref || Math.random())}`}>
-                <div><strong>{textValue(row.metric_label || row.metric_key, '指标')}</strong><span>{numberFormatter.format(safeNumber(row.metric_value))}</span></div>
+                <div><strong>{textValue(row.metric_label || row.metric_key, '指标')}</strong><span>{kpiValueLabel(row.metric_value, row.aggregation_eligible)}</span></div>
                 <p>{textValue(row.project_name || row.project_id, '-')} · {textValue(row.kol_name || row.kol_id, '-')}</p>
                 <em>{textValue(row.ledger_date || row.created_at, '-')} · {textValue(row.source_type, '-')} · {textValue(row.source_ref, '-')}</em>
                 {entities.length ? <em>证据链：{entities.slice(0, 5).map((item) => `${textValue(item.type, 'entity')}#${textValue(item.id, '-')}`).join(' → ')}</em> : null}
@@ -115,7 +118,7 @@ export function StaffProfileDrawer({
                 {evidence.recommendation_id ? <em>推荐 #{textValue(evidence.recommendation_id, '-')} · Outcome #{textValue(evidence.outcome_id, '-')} · Launch #{textValue(evidence.launch_id, '-')}</em> : null}
                 {evidence.formula ? <em>公式：{textValue(evidence.formula, '-')}</em> : null}
                 {Array.isArray(evidence.components) && evidence.components.length ? (
-                  <em>组件：{evidence.components.slice(0, 4).map((item: Record<string, unknown>) => `${textValue(item.metric_label || item.metric_key, '指标')} ${numberFormatter.format(safeNumber(item.contribution))}`).join(' / ')}</em>
+                  <em>组件：{evidence.components.slice(0, 4).map((item: Record<string, unknown>) => `${textValue(item.metric_label || item.metric_key, '指标')} ${kpiValueLabel(item.contribution, item.aggregation_eligible)}`).join(' / ')}</em>
                 ) : null}
               </article>
             );
@@ -192,7 +195,7 @@ export function StaffProfileDrawer({
         <DetailList title="KPI Ledger" rows={kpi.slice(0, 20)} empty="暂无 KPI Ledger。">
           {(row) => (
             <article key={`staff-kpi-${String(row.id || row.source_ref || Math.random())}`}>
-              <div><strong>{textValue(row.metric_label || row.metric_key, '指标')}</strong><span>{numberFormatter.format(safeNumber(row.metric_value))}</span></div>
+              <div><strong>{textValue(row.metric_label || row.metric_key, '指标')}</strong><span>{kpiValueLabel(row.metric_value, row.aggregation_eligible)}</span></div>
               <p>{textValue(row.project_name || row.project_id, '-')} · {textValue(row.kol_name || row.kol_id, '-')}</p>
               <em>{textValue(row.ledger_date || row.created_at, '-')} · {textValue(row.source_type, '-')}</em>
               {Array.isArray((row.source_context as Record<string, unknown> | undefined)?.entities) ? (

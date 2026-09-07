@@ -6,7 +6,7 @@
 分组口径(2026-07-06 真库侦察,每组命中定义写进 basis,可追溯):
   kol_recommend        vkpi_recommendation_outcomes(778 行)+ vkpi_recommendation_feedback(1 行)。
                        预测=系统推荐该 KOL 值得推进;命中=任一正向业务节点为真
-                       (shortlisted/claimed/outreach/reply/agreement/published/order,
+                       (shortlisted/claimed/agreement/published/order;未核验收发节点剔除,
                        由 refresh_open_outcomes 每日从真实业务行回流)或正向人工反馈;
                        未命中=was_rejected 为真或负向反馈;无任何裁决=pending 不计分母。
   market_bet           vkpi_bet_ledger(Market Brain 押注,2 行)。预测=hypothesis+probability;
@@ -39,6 +39,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.recommendations.communication_evidence import (
+    COMMUNICATION_NODES, LABEL_SEMANTICS, communication_evidence, project_outcome_communications,
+)
 
 logger = get_logger(__name__)
 
@@ -53,10 +56,10 @@ MAX_WINDOW = 200
 SCAN_LIMIT = 5000               # 每组扫描行数上限(判决在 Python 侧,表都很小)
 
 # kol_recommend 正向业务节点(refresh_open_outcomes 从真实业务行回流的 BOOLEAN 列)
-_POSITIVE_OUTCOME_COLS: tuple[str, ...] = (
+_POSITIVE_OUTCOME_COLS: tuple[str, ...] = tuple(node for node in (
     "was_shortlisted", "was_claimed", "outreach_sent", "reply_received",
     "agreement_reached", "content_published", "order_attributed",
-)
+) if node not in COMMUNICATION_NODES)
 # 人工反馈词表(vkpi_recommendation_feedback.feedback_type;侦察实见 shortlist)
 _POSITIVE_FEEDBACK_TYPES = frozenset({"shortlist", "accept", "accepted", "adopt", "like", "positive", "promote", "claim"})
 _NEGATIVE_FEEDBACK_TYPES = frozenset({"reject", "rejected", "dismiss", "dismissed", "negative", "exclude", "downvote"})
@@ -203,7 +206,7 @@ def _collect_kol_recommend(conn: Any, window: int) -> dict[str, Any]:
         judged: list[dict[str, Any]] = []
         pending = 0
         for raw in out_rows:
-            row = dict(raw)
+            row = project_outcome_communications(raw) or {}
             rec_id = int(row.get("recommendation_id") or 0)
             fb_types = fb_map.get(rec_id, set())
             positive = any(_truthy(row.get(col)) for col in _POSITIVE_OUTCOME_COLS) or bool(fb_types & _POSITIVE_FEEDBACK_TYPES)
@@ -215,18 +218,19 @@ def _collect_kol_recommend(conn: Any, window: int) -> dict[str, Any]:
                 judged.append({"hit": False, "at": _iso(row.get("recommended_at"))})
             else:
                 pending += 1
-        return _finalize(
+        result = _finalize(
             action_type="kol_recommend", label=label, window=window,
             judged=judged, pending_count=pending, scanned=len(out_rows),
             basis_extra={
                 "source": ["vkpi_recommendation_outcomes", "vkpi_recommendation_feedback"],
-                "hit_definition": "任一正向业务节点为真(shortlisted/claimed/outreach/reply/agreement/published/order,来自 refresh_open_outcomes 真实业务行回流)或正向人工反馈(shortlist/accept 等)",
+                "hit_definition": "非通信运营/业务节点(shortlisted/claimed/agreement/published/order)或正向人工反馈(shortlist/accept 等);未核验发送/回复不能作为命中",
                 "miss_definition": "was_rejected 为真或负向人工反馈(reject/dismiss 等)",
                 "pending_definition": "既无正向节点也无裁决反馈的推荐(展示过但没人对答案),不计分母",
             },
         )
     except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级
-        return _error_group("kol_recommend", label, exc)
+        result = _error_group("kol_recommend", label, exc)
+    return {**result, "label_semantics": LABEL_SEMANTICS, "communication_evidence": communication_evidence()}
 
 
 def _collect_market_bet(conn: Any, window: int) -> dict[str, Any]:

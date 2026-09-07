@@ -2,26 +2,22 @@ import { Sparkles } from 'lucide-react';
 import { formatMoneyShort } from '../projectDeliverableStyle';
 import type { VkpiProjectRow } from '../../../vkpiTypes';
 import type { ExpenseLine } from '../../../../../domains/projects';
-import { centsValue, costRowAmount, objectValue, productCost, rowProductSent } from '../ProjectDetailTabs.shared';
+import { buildCampaignFinance, FINANCE_STATE_LABELS, type FinanceAmount } from './CampaignFinanceTab.finance';
 
-interface CostLedgerTotals {
-  contract: number;
-  shipping: number;
-  product: number;
-  total: number;
+function amountLabel(value: FinanceAmount): string {
+  if (value.mixedCurrency) return '多币种，见明细';
+  if (value.amount === null) return '待确认';
+  if (value.currency === 'USD') return formatMoneyShort(value.amount);
+  return `${value.amount} ${value.currency || '（币种待核）'}`;
 }
 
-function costLedgerTotals(costRows: Array<Record<string, unknown>>): CostLedgerTotals {
-  return costRows.reduce<CostLedgerTotals>((totals, row) => {
-    if (String(row.status || '').toLowerCase() === 'void') return totals;
-    const type = String(row.cost_type || '').toLowerCase();
-    const amount = centsValue(row) / 100;
-    if (type === 'shipping') totals.shipping += amount;
-    else if (type === 'product' || type === 'sample') totals.product += amount;
-    else if (type === 'cash_fee' || type === 'contract' || type === 'creator_fee') totals.contract += amount;
-    totals.total += amount;
-    return totals;
-  }, { contract: 0, shipping: 0, product: 0, total: 0 });
+function CostAmount({ value, estimateNote }: { value: FinanceAmount; estimateNote?: string }) {
+  return <span>
+    {amountLabel(value)}
+    {value.states.length > 0 ? <span className="block text-[9px] text-slate-400" title={estimateNote}>
+      {value.states.map((state) => FINANCE_STATE_LABELS[state]).join(' / ')}
+    </span> : null}
+  </span>;
 }
 
 export function CampaignFinanceTab({
@@ -39,55 +35,20 @@ export function CampaignFinanceTab({
   onOpenShippingInfo: () => void;
   onOpenCostEntry?: (row: VkpiProjectRow, type?: 'cash_fee' | 'shipping' | 'product') => void;
 }) {
-  const ledgerTotals = costLedgerTotals(costRows);
-  const expenseById = new Map(expenseLines.map((line) => [line.id, line]));
-  const rowCosts = rows.map((row) => {
-    const shippingFee = costRowAmount(costRows, row, 'shipping');
-    const productSent = rowProductSent(row);
-    const ledgerProductCost = costRowAmount(costRows, row, 'product');
-    const estimatedProductCost = productCost(productSent, productUnitCosts);
-    const productCostAmount = ledgerProductCost || estimatedProductCost;
-    const productCostIsEstimate = !ledgerProductCost && estimatedProductCost > 0;
-    const ledgerContractFee = costRowAmount(costRows, row, 'contract');
-    const expenseAmount = expenseById.get(row.id)?.amount ?? row.cost ?? 0;
-    const contractFee = ledgerContractFee || Math.max(expenseAmount - shippingFee - productCostAmount, 0);
-    // 残差推算的合同费要打"估"——与产品成本估算同口径,不冒充账本真值(扫描 #10)。
-    const contractFeeIsEstimate = !ledgerContractFee && contractFee > 0;
-    return {
-      row,
-      contractFee,
-      contractFeeIsEstimate,
-      shippingFee,
-      productSent,
-      productCost: productCostAmount,
-      productCostIsEstimate,
-      total: contractFee + shippingFee + productCostAmount,
-      hasContract: contractFee > 0,
-    };
-  });
-  const totalContract = ledgerTotals.contract || rowCosts.reduce((sum, item) => sum + item.contractFee, 0);
-  const totalShipping = ledgerTotals.shipping || rowCosts.reduce((sum, item) => sum + item.shippingFee, 0);
-  const totalProductCost = ledgerTotals.product || rowCosts.reduce((sum, item) => sum + item.productCost, 0);
-  const totalAll = totalContract + totalShipping + totalProductCost;
-  // 横幅口径:账本真值与倒推估算分开计数,不再合并冒充"已从合同提取"。
-  const ledgerContractRows = rowCosts.filter((item) => item.hasContract && !item.contractFeeIsEstimate).length;
-  const estimatedContractRows = rowCosts.filter((item) => item.contractFeeIsEstimate).length;
-  const rowsWithProductCost = rowCosts.filter((item) => item.productCost > 0).length;
-  const averageCost = totalAll / Math.max(rowCosts.filter((item) => item.contractFee + item.productCost > 0).length, 1);
+  const { rowCosts, totals, voidCount } = buildCampaignFinance(rows, expenseLines, costRows, productUnitCosts);
 
   return (
     <div className="p-4 space-y-4" aria-label="项目费用">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          ['合同费用', totalContract, '#a855f7', '已合作阶段录入'],
-          ['快递费', totalShipping, '#06b6d4', '已发货阶段录入'],
-          // 子标签曾标"零售价"但贴的是成本数——这里只有产品成本口径,如实标注。
-          ['产品成本', totalProductCost, '#10b981', '按产品成本计 · 零售价未录入'],
-          ['总成本', totalAll, '#fb923c', `${rows.length} 个 KOL`],
+          ['已确认成本', amountLabel(totals.confirmed), '#a855f7', '仅 actual 且有审批时间的成本记录'],
+          ['待审核成本', amountLabel(totals.pending), '#06b6d4', '未计入已确认成本'],
+          ['估算成本', amountLabel(totals.estimate), '#10b981', '含目录与余额估算，非确认金额'],
+          ['实际支付', '未核验', '#fb923c', '当前数据不含付款回执'],
         ].map(([label, value, color, sub]) => (
           <div key={String(label)} className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3">
             <div className="text-[10px] text-slate-500 mb-1">{label}</div>
-            <div className="text-[20px] font-bold tabular-nums" style={{ color: String(color) }}>{formatMoneyShort(Number(value))}</div>
+            <div className="text-[20px] font-bold tabular-nums" style={{ color: String(color) }}>{value}</div>
             <div className="text-[9.5px] text-slate-500 mt-1">{sub}</div>
           </div>
         ))}
@@ -96,8 +57,8 @@ export function CampaignFinanceTab({
       <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-3 flex items-start gap-2.5">
         <Sparkles size={13} className="text-purple-300 mt-0.5 shrink-0" />
         <div className="text-[10.5px] text-slate-300">
-          合同费用:账本入账 {ledgerContractRows} 份 · 估算 {estimatedContractRows} 份 + {rowsWithProductCost} 个 KOL 计入产品成本 · 平均 KOL 总成本{' '}
-          <span className="text-purple-300 font-semibold">{formatMoneyShort(averageCost)}</span>
+          费用记录不代表合同已签署或款项已支付；签约、实付未核验。状态待核 {totals.unknown.count} 条 · 已作废 {voidCount} 条（不计入金额）。
+          缺失金额显示待确认，已记录的 0 保留为 0；小计是费用记录额，可能包含待审或估算。
         </div>
       </div>
 
@@ -126,7 +87,7 @@ export function CampaignFinanceTab({
         <table className="w-full text-[11px]">
           <thead>
             <tr className="text-left text-[10px] text-slate-500 border-b border-white/[0.04]">
-              {['KOL', '合同费', '快递费', '产品 (成本)', '小计', '状态', '操作'].map((header) => (
+              {['KOL', '合作费用 / 余额估算', '快递费', '产品 (成本)', '记录额小计', '费用状态', '操作'].map((header) => (
                 <th key={header} className="px-4 py-2 font-medium">{header}</th>
               ))}
             </tr>
@@ -146,49 +107,29 @@ export function CampaignFinanceTab({
                   </div>
                 </td>
                 <td className="px-4 py-2.5 text-slate-300 tabular-nums">
-                  {item.hasContract ? (
-                    <span>
-                      {formatMoneyShort(item.contractFee)}
-                      {item.contractFeeIsEstimate ? (
-                        <span className="text-[9px] text-amber-300/80 ml-1" title="按总支出倒推估算(成本账本暂无该 KOL 签约费行;合同确认归档后自动入账)">估</span>
-                      ) : null}
-                    </span>
-                  ) : <span className="text-slate-600">—</span>}
+                  <CostAmount value={item.contract} estimateNote="没有合作费用记录时可按费用余额估算；余额不证明合同金额、签约或支付。" />
                 </td>
                 <td className="px-4 py-2.5 text-slate-300 tabular-nums">
-                  {item.shippingFee > 0 ? formatMoneyShort(item.shippingFee) : <span className="text-slate-600">—</span>}
+                  <CostAmount value={item.shipping} />
                 </td>
                 <td className="px-4 py-2.5 tabular-nums">
-                  {item.productCost > 0 ? (
-                    <span>
-                      <span className="text-emerald-400">{formatMoneyShort(item.productCost)}</span>
-                      {item.productCostIsEstimate ? (
-                        <span className="text-[9px] text-amber-300/80 ml-1" title="按 SKU 成本目录单价估算(成本账本暂无该 KOL 产品成本行)">估</span>
-                      ) : null}
-                      <span className="text-[9.5px] text-slate-500 ml-1">({Math.max(item.productSent.length, 1)}件)</span>
-                    </span>
-                  ) : (
-                    <span className="text-slate-600">—</span>
-                  )}
+                  <CostAmount value={item.product} estimateNote="目录单价仅作估算；缺少单价或币种时保持待核。" />
+                  {item.productSent.length > 0 ? <span className="text-[9.5px] text-slate-500 ml-1">（{item.productSent.length} 项产品）</span> : null}
                 </td>
                 <td className="px-4 py-2.5 text-white font-semibold tabular-nums">
-                  {item.total > 0 ? formatMoneyShort(item.total) : <span className="text-slate-600 font-normal">—</span>}
+                  {amountLabel(item.total)}
                 </td>
                 <td className="px-4 py-2.5">
-                  {item.hasContract && !item.contractFeeIsEstimate ? (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">已签合同</span>
-                  ) : item.hasContract ? (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300/80" title="费用为倒推估算,账本暂无签约费行">费用估算</span>
-                  ) : (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-slate-500">待签约</span>
-                  )}
+                  <span className="text-[10px] text-slate-300">
+                    {item.total.states.map((state) => FINANCE_STATE_LABELS[state]).join(' / ') || (item.voidCount ? '费用已作废' : '费用待确认')}
+                  </span>
                 </td>
                 <td className="px-4 py-2.5">
                   {onOpenCostEntry ? (
                     <button
                       type="button"
                       className="rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-slate-200 hover:border-purple-400/40 hover:text-white transition"
-                      onClick={() => onOpenCostEntry(item.row, item.hasContract ? 'shipping' : 'cash_fee')}
+                      onClick={() => onOpenCostEntry(item.row, item.contract.count > 0 ? 'shipping' : 'cash_fee')}
                     >
                       录入费用
                     </button>

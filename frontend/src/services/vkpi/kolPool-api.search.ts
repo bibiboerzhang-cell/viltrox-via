@@ -49,6 +49,7 @@ export async function smartKolSearch(
   input: string,
   params: {
     mode?: "auto" | "url" | "text" | "recall" | string;
+    searchMode?: "hybrid" | "fresh_network" | "saved";
     objective?: "prospective_growth" | "existing_evidence";
     execute?: boolean;
     maxPosts?: number;
@@ -84,6 +85,15 @@ export async function smartKolSearch(
     languages?: string[];
     profileTypes?: string[];
     localQualificationSpec?: Row;
+    onlineQualificationSpec?: Row;
+    includeNewDiscovery?: boolean;
+    executeNewDiscovery?: boolean;
+    advanceLimit?: number;
+    representativeVideoLimit?: number;
+    newDiscoveryLimit?: number;
+    newDiscoveryPerPlatformLimit?: number;
+    newDiscoveryPerPlatformLimits?: Record<string, number>;
+    newDiscoveryPlatforms?: string[];
     timeoutMs?: number;
   } = {},
 ): Promise<VkpiKolSmartSearchResponse> {
@@ -94,6 +104,7 @@ export async function smartKolSearch(
     create_session: params.createSession ?? true,
     response_projection: "smart_local_compact_v1",
   };
+  if (params.searchMode) body.search_mode = params.searchMode;
   if (params.execute) body.execute = true;
   if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
   if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
@@ -119,6 +130,15 @@ export async function smartKolSearch(
   if (params.languages?.length) body.languages = params.languages;
   if (params.profileTypes?.length) body.profile_types = params.profileTypes;
   if (params.localQualificationSpec) body.local_qualification_spec = params.localQualificationSpec;
+  if (params.onlineQualificationSpec) body.online_qualification_spec = params.onlineQualificationSpec;
+  if (typeof params.includeNewDiscovery === "boolean") body.include_new_discovery = params.searchMode === "saved" ? false : params.includeNewDiscovery;
+  if (typeof params.executeNewDiscovery === "boolean") body.execute_new_discovery = params.searchMode === "saved" ? false : params.executeNewDiscovery;
+  if (typeof params.advanceLimit === "number") body.advance_limit = params.advanceLimit;
+  if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;
+  if (typeof params.newDiscoveryLimit === "number") body.new_discovery_limit = params.newDiscoveryLimit;
+  if (typeof params.newDiscoveryPerPlatformLimit === "number") body.new_discovery_per_platform_limit = params.newDiscoveryPerPlatformLimit;
+  if (params.newDiscoveryPerPlatformLimits) body.new_discovery_per_platform_limits = params.newDiscoveryPerPlatformLimits;
+  if (params.newDiscoveryPlatforms?.length) body.new_discovery_platforms = params.newDiscoveryPlatforms;
   return apiFetch<VkpiKolSmartSearchResponse>(
     "/api/admin/vkpi/kol-smart-search",
     {
@@ -134,6 +154,7 @@ export async function smartKolSearchProfileAdvanceJob(
   token: string,
   input: string,
   params: {
+    searchMode?: "hybrid" | "fresh_network" | "saved";
     objective?: "prospective_growth" | "existing_evidence";
     candidateLimit?: number;
     limit?: number;
@@ -177,8 +198,9 @@ export async function smartKolSearchProfileAdvanceJob(
     input,
     objective: params.objective === "existing_evidence" ? "existing_evidence" : "prospective_growth",
     queue_pipeline: true,
-    include_new_discovery: params.includeNewDiscovery ?? true,
+    include_new_discovery: params.searchMode === "saved" ? false : params.includeNewDiscovery ?? true,
   };
+  if (params.searchMode) body.search_mode = params.searchMode;
   if (params.newDiscoveryPlatforms?.length) body.new_discovery_platforms = params.newDiscoveryPlatforms;
   // 目标市场与内容语言独立传递；未选择语言时不附 languages，不从国家码推断。
   if (params.market) body.market = params.market;

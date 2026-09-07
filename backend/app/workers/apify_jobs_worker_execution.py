@@ -5,10 +5,12 @@ and unit tests continue to control the exact same provider and DB boundaries.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Mapping
 
 import psycopg
+from app.domains.kol.search_execution_fence import SearchExecutionSuperseded
 from app.workers.apify_jobs_worker_locks import WorkerConnectionRetired, retire_worker_connection, worker_lock_cleanup_failed
 
 
@@ -129,6 +131,10 @@ def execute_claimed_job_impl(
                 provider_claim_state,
             )
             return status
+        except SearchExecutionSuperseded:
+            # The replacement owns job and provider state. Do not even read
+            # its terminal status, sync its session or settle the old fence.
+            return "superseded"
         except namespace["ApifyBudgetBlocked"]:
             if fence:
                 namespace["finalize_provider_execution_claim"](
@@ -143,6 +149,21 @@ def execute_claimed_job_impl(
             raise
         except namespace["ApifyExecutionClaimBlocked"]:
             # A live owner is execution state, not a provider failure.
+            raise
+        except asyncio.CancelledError:
+            # Shutdown may interrupt a billed call after dispatch. Preserve an
+            # unknown outcome rather than granting a pre-provider retry. The
+            # queue lease/reclaim owner still owns job-state transitions.
+            if fence:
+                try:
+                    namespace["finalize_provider_execution_claim"](
+                        provider_task_id, fence, "unknown"
+                    )
+                except Exception as persistence_error:
+                    namespace["logger"].warning(
+                        "cancelled provider claim persistence unconfirmed | id=%s error_type=%s",
+                        job_id, type(persistence_error).__name__,
+                    )
             raise
         except Exception as exc:
             retire_connection = worker_lock_cleanup_failed(exc)

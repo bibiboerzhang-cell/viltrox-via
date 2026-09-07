@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
+from app.domains.market_brain.communication_projection import project_public_7d_window
 
 logger = get_logger(__name__)
 
@@ -67,7 +68,7 @@ def _outcome_out(row: dict[str, Any]) -> dict[str, Any]:
         "content_angle": row.get("content_angle"),
         "expected_result": _loads(row.get("expected_result"), {}),
         "actual_result": _loads(row.get("actual_result"), {}),
-        "window_7d": _loads(row.get("window_7d"), {}),
+        "window_7d": project_public_7d_window(_loads(row.get("window_7d"), {})),
         "window_14d": _loads(row.get("window_14d"), {}),
         "window_28d": _loads(row.get("window_28d"), {}),
         "decision": row.get("decision"),

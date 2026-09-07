@@ -83,6 +83,7 @@ export type SearchProgressContractView = {
   // 编排挂起(会话 1106 案):召回项先到、全网发现/档案批次尚未登记的窗口,后端按会话项证据会得到
   // 30/30 ready;编排器显式声明「后面还有任务」时此标为真 → 不得判终态、不得停轮询。
   orchestrationPending: boolean;
+  orchestrationInterrupted?: boolean;
   fullAnalysisComplete: boolean;
   fullAnalysisExecutionComplete: boolean;
   fullAnalysisObservable: boolean;
@@ -130,6 +131,8 @@ export type SearchSessionProgress = {
   decisionEligible: boolean;
   /** Backward-compatible alias used by the polling loop. */
   requiredTasksComplete: boolean;
+  /** This orchestration stopped; registered provider/child tasks may remain unresolved. */
+  observationTerminal?: boolean;
   /** 新服务端统一合同；null 表示旧会话，只能展示无百分比的降级阶段。 */
   contract: SearchProgressContractView | null;
 };
@@ -144,6 +147,15 @@ function contractPercent(value: unknown, requested: number | null): number | nul
   if (requested == null || requested <= 0) return null;
   const parsed = contractNumber(value);
   return parsed == null ? null : Math.max(0, Math.min(100, parsed));
+}
+
+function interruptedSearch(session: VkpiKolSearchHistoryItem | null): boolean {
+  const summary = asRecord(session?.result_summary);
+  const job = asRecord(summary.smart_search_profile_advance_job);
+  return typeof summary.search_execution_id === "string" && !!summary.search_execution_id.trim()
+    && Number.isInteger(summary.search_execution_job_id) && Number(summary.search_execution_job_id) > 0
+    && job.job_id === summary.search_execution_job_id && job.execution_id === summary.search_execution_id
+    && job.status === "failed" && ["search_pipeline_failed", "search_pipeline_cancelled"].includes(String(job.reason));
 }
 
 function progressContractStage(key: SearchProgressContractStage["key"], value: unknown): SearchProgressContractStage {
@@ -219,6 +231,7 @@ export function searchProgressContractFromSession(session: VkpiKolSearchHistoryI
     terminalPct: contractPercent(contract.terminal_pct, requestedUnits),
     blockedByWorker: contract.blocked_by_worker === true,
     orchestrationPending: contract.orchestration_pending === true,
+    orchestrationInterrupted: interruptedSearch(session),
     fullAnalysisComplete: contract.full_analysis_complete === true,
     fullAnalysisExecutionComplete: contract.full_analysis_execution_complete === true,
     fullAnalysisObservable: contract.full_analysis_observable === true,
@@ -245,6 +258,7 @@ export function searchProgressContractFromSession(session: VkpiKolSearchHistoryI
 
 // 会话是否终态(轮询停/续接依据)。契约在场时以契约为准:活跃单元/worker 阻塞/编排挂起都不是终态。
 export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): boolean {
+  if (interruptedSearch(session)) return true;
   const contract = searchProgressContractFromSession(session);
   if (contract) {
     const active = (contract.queuedUnits ?? 0) + (contract.runningUnits ?? 0) + (contract.activeUnits ?? 0);
@@ -290,7 +304,7 @@ function downstreamStageProgress(value: unknown): SearchStageProgress {
 }
 
 /** Derive a truthful staged view from existing backend summary/count fields; never invent totals. */
-export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null): SearchSessionProgress {
+function deriveSearchSessionProgress(session: VkpiKolSearchHistoryItem | null): SearchSessionProgress {
   const summary = asRecord(session?.result_summary);
   const progressContract = searchProgressContractFromSession(session);
   const batch = asRecord(summary.profile_batch_advance);
@@ -556,4 +570,12 @@ export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null):
     requiredTasksComplete,
     contract: null,
   };
+}
+
+export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null): SearchSessionProgress {
+  const progress = deriveSearchSessionProgress(session);
+  return interruptedSearch(session)
+    ? { ...progress, phase: "failed", phaseLabel: "本次查找已中止", observationTerminal: true,
+      fullAnalysisComplete: false, decisionEligible: false }
+    : progress;
 }

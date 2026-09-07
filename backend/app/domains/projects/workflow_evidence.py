@@ -12,6 +12,7 @@ from app.domains import audit, content_metric_snapshots
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects import stage_canonical
+from app.domains.projects import shipment_write_guard as shipping_guard
 from app.domains.projects.workflow_assignment_feedback import record_contact_feedback
 from app.domains.projects.workflow_common import SIDE_STAGES, _amount_cents, _int, _json, _loads, normalize_stage, staff_id, utcnow
 from app.shared.project_creator_lifecycle_ports import RecommendationFeedbackSink
@@ -80,6 +81,7 @@ def advance_project_kol_assignment(project_id: int, kol_ref: str | int, body: di
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     conn = get_conn()
+    shipping_guard.lock_row(conn, "vkpi_projects", project_id)
     row = _assignment_row(conn, project_id, kol_ref)
     if not row:
         raise LookupError("project kol assignment not found")
@@ -89,6 +91,8 @@ def advance_project_kol_assignment(project_id: int, kol_ref: str | int, body: di
     to_stage = _ASSIGNMENT_STAGE_FALLBACK_ALIASES.get(to_stage, to_stage)
     if to_stage not in _CONTROLLED_ASSIGNMENT_STAGES:
         raise ValueError("unsupported stage")
+    row = shipping_guard.lock_assignment(conn, row["id"], project_id)
+    shipping_guard.guard_assignment_change(conn, row, {"stage": to_stage}, staff=staff)
     now = utcnow()
     terminal_status = to_stage if to_stage in {"stalled", "lost", "released", "cancelled"} else "active"
     metadata = _loads(row["metadata_json"])
@@ -130,12 +134,16 @@ def update_project_kol_shipping(project_id: int, kol_ref: str | int, body: dict[
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     conn = get_conn()
+    shipping_guard.lock_row(conn, "vkpi_projects", project_id)
     row = _assignment_row(conn, project_id, kol_ref)
     if not row:
         raise LookupError("project kol assignment not found")
     tracking_number = str(body.get("tracking_number") or body.get("trackingNo") or body.get("no") or "").strip()
     if not tracking_number:
         raise ValueError("tracking_number required")
+    row = shipping_guard.lock_assignment(conn, row["id"], project_id)
+    shipping_guard.guard_assignment_change(conn, row, {"tracking_number": tracking_number, "stage": "shipped"}, staff=staff)
+    shipping_guard.existing_shipment(conn, project_id, tracking_number, {"assignment_id": row["id"], "kol_pool_id": row.get("kol_pool_id")})
     now = utcnow()
     metadata = _loads(row["metadata_json"])
     metadata["shipping"] = {
@@ -244,14 +252,7 @@ def _upsert_shipment_shipped(
     carrier: str,
     now: str,
 ) -> None:
-    """发货动作即落 vkpi_shipments 账本行(2026-07-18 体检修:履约闭环断链)。
-
-    此前 update_project_kol_shipping 只写 assignment.metadata_json.shipping,
-    vkpi_shipments 零写入 → scan_delivered_into_windows 永远看不到真实发货
-    (842 条 device_sent 全部游离在闭环外)。幂等键 (project_id, tracking_number)
-    与 record_delivered_signal 对齐:后续 17track 签收把同键行推到 delivered。
-    已 delivered 的行绝不回退状态。
-    """
+    """同事务记录派单发货；幂等键与签收信号一致，已 delivered 不回退。"""
     existing = conn.execute(
         """
         SELECT id, status, shipped_at FROM vkpi_shipments
@@ -265,7 +266,7 @@ def _upsert_shipment_shipped(
         "assignment_id": int(assignment_id),
         "kol_pool_id": int(kol_pool_id) if kol_pool_id else None,
     }
-    has_assignment_col = _shipments_has_assignment_column(conn)
+    has_assignment_col = shipping_guard.shipment_assignment_column(conn)
     if existing is not None:
         ex = dict(existing)
         keep_shipped = ex.get("shipped_at") or now

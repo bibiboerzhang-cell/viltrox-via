@@ -17,6 +17,7 @@ from app.domains.kol.search_sessions_attach import (
     _safe_public_code,
 )
 from app.domains.kol.search_sessions_serde import _dict, _int_or_none, _list, _text
+from app.domains.kol.query_cell_coverage_projection import project_query_cell_coverage
 from app.domains.kol.search_sessions_targeted import (
     project_candidate_query_context,
     project_growth_candidate_context,
@@ -83,6 +84,16 @@ def safe_online_qualification(value: Any) -> dict[str, Any]:
         "target_count": ONLINE_TARGET,
     }
     status = _text(raw.get("status")).lower()
+    if status == "blocked":
+        stopped_by = _dict(raw.get("round_gate")).get("stopped_by")
+        if not (stopped_by == "audience_evidence_source_unavailable"
+                and raw.get("terminal") is True and raw.get("snapshot_complete") is True
+                and all(type(raw.get(field)) is int and raw[field] == 0 for field in (
+                    "evaluated_count", "provider_calls", "provider_rounds", "returned_count"))
+                and raw.get("provider_calls_performed") is False):
+            return {}
+        output.update({"status": "blocked", "round_gate": {"stopped_by": stopped_by},
+                       "provider_calls_performed": False})
     if status in {"ready", "shortfall"}:
         output["status"] = status
     for key in (
@@ -131,6 +142,9 @@ def safe_online_qualification(value: Any) -> dict[str, Any]:
     targeted_search = project_targeted_search_summary(raw.get("targeted_search"))
     if targeted_search:
         output["targeted_search"] = targeted_search
+    coverage = project_query_cell_coverage(raw.get("query_cell_coverage"))
+    if coverage:
+        output["query_cell_coverage"] = coverage
     policy = _dict(raw.get("policy"))
     follower_filter = _dict(policy.get("followers_filter"))
     output["policy"] = {
@@ -211,8 +225,8 @@ def _strict_bound_item(
     }
 
 
-def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
-    from app.domains.kol.search_sessions import get_session, record_items
+def attach_online_qualified_result(session_id: int, result: dict[str, Any], *, lane_only: bool = False) -> dict[str, Any]:
+    from app.domains.kol.search_sessions import get_session, record_items, record_lane_items
 
     current = get_session(int(session_id))
     existing_summary = _dict(current.get("result_summary"))
@@ -234,7 +248,7 @@ def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> d
     seen_pool_ids: set[int] = set()
     seen_server_ranks: set[int] = set()
     seen_global_ranks: set[int] = set()
-    for raw in _list(result.get("items")):
+    for raw in ([] if contract.get("status") == "blocked" else _list(result.get("items"))):
         if not isinstance(raw, dict):
             continue
         query_context = project_candidate_query_context(raw)
@@ -335,19 +349,18 @@ def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> d
     contract["returned_count"] = len(items)
     contract["net_new_accepted_count"] = len(items)
     contract["shortfall"] = ONLINE_TARGET - len(items)
-    contract["status"] = "ready" if len(items) == ONLINE_TARGET else "shortfall"
+    if contract.get("status") != "blocked":
+        contract["status"] = "ready" if len(items) == ONLINE_TARGET else "shortfall"
     summary = {
-        **existing_summary,
+        **({} if lane_only else existing_summary),
         "_authoritative_snapshot_lane": "online",
         "online_snapshot_attached": True,
         "online_snapshot_complete": True,
         "online_qualification": contract,
     }
-    recorded = record_items(
-        int(session_id),
-        items,
-        status="ready" if len(items) == ONLINE_TARGET else "partial",
-        summary=summary,
-    )
+    if lane_only:
+        recorded = record_lane_items(int(session_id), items, lane="online", status=contract["status"], summary=summary)
+    else:
+        recorded = record_items(int(session_id), items, status="ready" if len(items) == ONLINE_TARGET else "partial", summary=summary)
     recorded["online_qualification"] = contract
     return recorded

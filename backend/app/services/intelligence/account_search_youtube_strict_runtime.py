@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List
 
+from app.services.intelligence.account_search_provider_policy import (
+    validate_provider_discovery_policy, youtube_discovery_hints,
+)
+
 
 @dataclass(frozen=True)
 class StrictSearchPlan:
@@ -23,6 +27,7 @@ class StrictSearchPlan:
     relevance_language: str
     exact_query: bool
     exhausted_token: str
+    provider_discovery_policy: Dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -63,7 +68,9 @@ def build_strict_search_plan(
     anchor_index: Callable[..., Dict[str, Any]],
     precision_terms_default: int,
     exhausted_token: str,
+    provider_discovery_policy: Dict[str, Any] | None = None,
 ) -> StrictSearchPlan | None:
+    provider_discovery_policy = validate_provider_discovery_policy(provider_discovery_policy)
     normalized_exact = " ".join(str(search_query or "").split())
     variants = (
         [normalized_exact]
@@ -87,6 +94,11 @@ def build_strict_search_plan(
     published_after = (
         datetime.now(timezone.utc) - timedelta(days=45)
     ).isoformat(timespec="seconds").replace("+00:00", "Z")
+    language_hint = (relevance_language or "en").strip().lower() or "en"
+    if provider_discovery_policy is not None:
+        hints = youtube_discovery_hints(provider_discovery_policy, video_evidence=True)
+        published_after = hints["publishedAfter"]
+        language_hint = hints.get("relevanceLanguage", "")
     return StrictSearchPlan(
         search_query=search_query,
         variants=variants,
@@ -94,9 +106,10 @@ def build_strict_search_plan(
         result_limit=max(1, min(50, int(safe_limit or 25))),
         page_tokens=page_tokens,
         published_after=published_after,
-        relevance_language=(relevance_language or "en").strip().lower() or "en",
+        relevance_language=language_hint,
         exact_query=exact_query,
         exhausted_token=exhausted_token,
+        provider_discovery_policy=provider_discovery_policy,
     )
 
 
@@ -160,7 +173,7 @@ def run_strict_search_pages(
                 "q": query_variant,
                 "publishedAfter": plan.published_after,
                 "maxResults": plan.result_limit,
-                "relevanceLanguage": plan.relevance_language,
+                **({"relevanceLanguage": plan.relevance_language} if plan.relevance_language else {}),
                 "safeSearch": "none",
                 "pageToken": plan.page_tokens.get(query_variant) or None,
             },

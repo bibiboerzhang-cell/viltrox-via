@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
+from app.shared.vkpi_kpi_communication_truth import KPI_LABEL_SEMANTICS, is_communication_metric, kpi_score_eligibility
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,9 @@ class RollupContext:
     metric_counts: dict[str, int]
 
     def upsert(self, **kwargs: Any) -> None:
+        if is_communication_metric(kwargs.get("metric_key")):
+            self.deps.add_status(self.status_counts, "skipped_unverified")
+            return
         status = self.deps.upsert_entry(
             self.conn,
             ledger_date=self.day,
@@ -57,7 +61,8 @@ class RollupContext:
             **kwargs,
         )
         self.deps.add_status(self.status_counts, status)
-        self.metric_counts[str(kwargs.get("metric_key") or "")] += 1
+        if status in {"inserted", "updated"}:
+            self.metric_counts[str(kwargs.get("metric_key") or "")] += 1
 
 
 RECOMMENDATION_EVENTS = (
@@ -65,8 +70,6 @@ RECOMMENDATION_EVENTS = (
     ("recommendation_rejected", "o.was_rejected", "o.rejected_at", "rejected"),
     ("recommendation_claimed", "o.was_claimed", "o.claimed_at", "claimed"),
     ("recommendation_project_created", "o.project_created", "o.project_created_at", "project_created"),
-    ("recommendation_outreach_sent", "o.outreach_sent", "o.outreach_sent_at", "outreach_sent"),
-    ("recommendation_reply_received", "o.reply_received", "o.reply_at", "reply_received"),
     ("recommendation_agreement_reached", "o.agreement_reached", "o.agreement_at", "agreement_reached"),
     ("recommendation_content_published", "o.content_published", "o.content_published_at", "content_published"),
     ("recommendation_order_attributed", "o.order_attributed", "o.first_order_at", "order_attributed"),
@@ -574,6 +577,8 @@ def _collect_staff_scores(
     )
     components: dict[int, dict[str, dict[str, float]]] = defaultdict(dict)
     for row in ctx.deps.ledger_source_query(ctx.day, ctx.staff_id):
+        if not kpi_score_eligibility(row):
+            continue
         staff_id = ctx.deps.as_int(row.get("staff_id"))
         if not staff_id:
             continue
@@ -653,6 +658,7 @@ def _derive_staff_scores(ctx: RollupContext) -> None:
                 "formula": "sum(metric_value * workload_weight)",
                 "components": components,
                 "weights": ctx.deps.workload_weights,
+                "label_semantics": KPI_LABEL_SEMANTICS,
             },
         )
         ctx.upsert(
@@ -667,6 +673,7 @@ def _derive_staff_scores(ctx: RollupContext) -> None:
                 "net_contribution_cents": round(values["net"], 4),
                 "net_contribution_bonus": net_credit,
                 "components": components,
+                "label_semantics": KPI_LABEL_SEMANTICS,
             },
         )
 
@@ -720,6 +727,7 @@ def _result(ctx: RollupContext, total_entries: Any) -> dict[str, Any]:
         "staff_id": ctx.staff_id,
         "inserted": int(ctx.status_counts.get("inserted", 0)),
         "updated": int(ctx.status_counts.get("updated", 0)),
+        "skipped_unverified": int(ctx.status_counts.get("skipped_unverified", 0)),
         "total_entries": int(total_entries or 0),
         "metric_counts": dict(sorted(ctx.metric_counts.items())),
         "workload_weights": ctx.deps.workload_weights,

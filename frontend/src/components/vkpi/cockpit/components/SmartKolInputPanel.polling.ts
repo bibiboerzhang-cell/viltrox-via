@@ -48,6 +48,7 @@ export function useSmartKolSessionPolling({
     let inFlight = false;
     let terminalSince: number | null = null;
     let timer: number | null = null;
+    let deadlineTimer: number | null = null;
     // 已应用过的快照指纹 + 它的派生值。后端这一拍一个字节都没变时,既不重新派生也不 setState。
     let appliedFingerprint: string | null = null;
     let appliedProgress: SearchSessionProgress | null = null;
@@ -87,7 +88,22 @@ export function useSmartKolSessionPolling({
     const stopPolling = () => {
       stopped = true;
       clearTimer();
+      if (deadlineTimer != null) window.clearTimeout(deadlineTimer);
+      deadlineTimer = null;
       resetSearchProgress(null);
+    };
+
+    const pauseAtDeadline = () => {
+      if (cancelled || stopped) return;
+      const terminal = appliedProgress?.observationTerminal === true || appliedProgress?.requiredTasksComplete === true;
+      const timeoutState = sessionPollStateAfterTimeout(sessionId, terminal);
+      const note = appliedProgress ? progressNoteOf(appliedProgress) : "后台任务状态暂未确认";
+      stopPolling();
+      setPollingSearchSessionId(timeoutState.pollingSessionId);
+      setPollPausedSessionId(timeoutState.pausedSessionId);
+      setSessionPollNotice(terminal ? `${note} · 结果已更新`
+        : `${note} · 已暂停同步；“继续同步”只刷新原任务状态，不会重复发起查找`);
+      void refreshHistory();
     };
 
     const poll = async () => {
@@ -120,7 +136,7 @@ export function useSmartKolSessionPolling({
         // Discovery arriving first does not mean the batch is complete. Keep receiving
         // trailing evidence until required tasks are terminal or the bounded poll pauses.
         const timedOut = Date.now() - startedAt > maxPollMs;
-        if (progress.requiredTasksComplete) {
+        if (progress.observationTerminal || progress.requiredTasksComplete) {
           if (terminalSince == null) terminalSince = Date.now();
           const graceUsedUp = Date.now() - terminalSince >= 30000;
           if (graceUsedUp || timedOut) {
@@ -144,6 +160,7 @@ export function useSmartKolSessionPolling({
         }
       } catch (err) {
         if (cancelled || stopped) return;
+        idleSteps += 1;
         // 失败提示同样走 store:一次网络抖动不该重画整棵结果树。
         publishSearchProgressNotice(sessionId, err instanceof Error ? err.message : "同步失败，稍后会自动重试");
       } finally {
@@ -170,10 +187,14 @@ export function useSmartKolSessionPolling({
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
+    // The observation window must also expire when GET rejects or never
+    // resolves. A late response is ignored; the server job is not cancelled.
+    deadlineTimer = window.setTimeout(pauseAtDeadline, maxPollMs);
     tick();
     return () => {
       cancelled = true;
       clearTimer();
+      if (deadlineTimer != null) window.clearTimeout(deadlineTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       resetSearchProgress(null);
     };

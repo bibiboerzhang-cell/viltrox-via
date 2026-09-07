@@ -34,12 +34,20 @@ def add_project_message(
     staff: dict[str, Any] | None = None,
     feedback_sink: RecommendationFeedbackSink | None = None,
 ) -> dict[str, Any]:
+    from app.shared.message_truth import capture_member_lookup, capture_message_fields, project_message_record, resolve_capture_kol
+
+    # Retain the port signature; manual capture cannot trigger a sent outcome.
+    del feedback_sink
+    body = capture_message_fields(body, project_id=project_id)
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     conn = get_conn()
     project = conn.execute("SELECT kol_id, assigned_staff_id FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
     if not project:
         raise LookupError("project not found")
+    lookup = capture_member_lookup(body, project["kol_id"])
+    members = conn.execute(*lookup).fetchall() if lookup else []
+    kol_id = resolve_capture_kol(body, project["kol_id"], members=members)
     now = utcnow()
     message_body = str(body.get("body") or body.get("message") or body.get("snippet") or "").strip()
     # P2:INSERT 取行一律 RETURNING——并发下 ORDER BY id DESC 会取到别人的行。
@@ -53,7 +61,7 @@ def add_project_message(
         """,
         (
             int(project_id),
-            _int(project["kol_id"]) or None,
+            kol_id or None,
             staff_id(staff) or _int(project["assigned_staff_id"]) or None,
             str(body.get("source") or "manual"),
             str(body.get("direction") or "outbound"),
@@ -77,32 +85,9 @@ def add_project_message(
             target_type="message",
             target_id=item.get("id", ""),
             detail=str(item.get("body") or item.get("snippet") or "")[:240],
-            metadata={"project_id": int(project_id), "kol_id": _int(project["kol_id"]) or None},
+            metadata={"project_id": int(project_id), "kol_id": kol_id or None},
         )
-        # C4 写口插桩(2026-08-23):项目级外联消息即时桥——outbound → outreach_sent
-        # (L 车道 sync_message_outcomes 同口径);主写已提交,桥失败只告警。
-        if feedback_sink is None:
-            logger.warning(
-                "project.feedback_sink_missing project_id=%s source=project_message",
-                project_id,
-            )
-        else:
-            try:
-                feedback_sink.record_message_outreach(
-                    message_id=item.get("id"),
-                    project_id=int(project_id),
-                    kol_id=_int(project["kol_id"]),
-                    direction=item.get("direction"),
-                    staff=staff,
-                    source="project_message",
-                )
-            except Exception:
-                logger.warning(
-                    "project.feedback_sink_failed project_id=%s source=project_message",
-                    project_id,
-                    exc_info=True,
-                )
-    return item
+    return project_message_record(item)
 
 def add_project_content(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
@@ -304,27 +289,31 @@ def add_project_shipment(project_id: int, body: dict[str, Any], *, staff: dict[s
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     conn = get_conn()
-    from app.repositories.projects_repo import ProjectsRepository
+    from app.domains.projects.shipment_write_guard import assert_new_dispatch, existing_shipment, lock_row
 
-    project = ProjectsRepository().get_sample_fields(int(project_id))  # L2:走 repo
-    if not project:
-        raise LookupError("project not found")
-    # 发货审批门槛(P0):已发起审批但未通过 → 拦截发货(人审真生效)。无审批记录默认放行(向后兼容)。
-    from app.domains.projects import shipment_approval
-
-    shipment_approval.assert_shippable(int(project_id), _int(project["kol_id"]) or 0, staff=staff)
+    project = lock_row(conn, "vkpi_projects", int(project_id))
+    subject = assert_new_dispatch(
+        conn, project_id, staff=staff, kol_pool_id=body.get("kol_pool_id"),
+        assignment_id=body.get("assignment_id"),
+    )
+    tracking_number = str(body.get("tracking_number") or "").strip()
+    existing = existing_shipment(conn, project_id, tracking_number, subject)
+    if existing is not None:
+        conn.commit()
+        return {**existing, "receipt_reused": True}
+    metadata = {**(body.get("metadata") if isinstance(body.get("metadata"), dict) else {}), **subject}
     now = utcnow()
-    conn.execute(
+    sample = conn.execute(
         """
         INSERT INTO vkpi_sample_assets (
             project_id, kol_id, product_sku, product_name, serial_number,
             sample_cost_cents, currency, return_required, status, shipped_at,
             received_at, note, metadata_json, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
         """,
         (
             int(project_id),
-            _int(project["kol_id"]) or None,
+            subject["kol_id"],
             str(body.get("product_sku") or project["product_sku"] or ""),
             str(body.get("product_name") or project["product_name"] or ""),
             str(body.get("serial_number") or ""),
@@ -335,26 +324,25 @@ def add_project_shipment(project_id: int, body: dict[str, Any], *, staff: dict[s
             str(body.get("shipped_at") or now),
             body.get("received_at"),
             str(body.get("note") or ""),
-            _json(body.get("metadata")),
+            _json(metadata),
             now,
             now,
         ),
-    )
-    sample_id = conn.execute("SELECT id FROM vkpi_sample_assets WHERE project_id=? ORDER BY id DESC LIMIT 1", (int(project_id),)).fetchone()
-    sample_asset_id = int(sample_id["id"]) if sample_id else None
-    conn.execute(
+    ).fetchone()
+    sample_asset_id = int(sample["id"])
+    shipment = conn.execute(
         """
         INSERT INTO vkpi_shipments (
             project_id, sample_asset_id, carrier, tracking_number, status,
             shipping_cost_cents, currency, shipped_at, delivered_at, evidence_url,
             note, metadata_json, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
         """,
         (
             int(project_id),
             sample_asset_id,
             str(body.get("carrier") or ""),
-            str(body.get("tracking_number") or ""),
+            tracking_number,
             str(body.get("shipping_status") or "shipped"),
             _amount_cents(body.get("shipping_cost_usd", body.get("shipping_cost", 0))),
             str(body.get("currency") or "USD"),
@@ -362,22 +350,20 @@ def add_project_shipment(project_id: int, body: dict[str, Any], *, staff: dict[s
             body.get("delivered_at"),
             str(body.get("evidence_url") or ""),
             str(body.get("note") or ""),
-            _json(body.get("metadata")),
+            _json(metadata),
             now,
             now,
         ),
-    )
+    ).fetchone()
     conn.commit()
     row = conn.execute(
         """
         SELECT sh.*, sa.product_sku, sa.product_name, sa.serial_number, sa.sample_cost_cents
         FROM vkpi_shipments sh
         LEFT JOIN vkpi_sample_assets sa ON sa.id = sh.sample_asset_id
-        WHERE sh.project_id=?
-        ORDER BY sh.id DESC
-        LIMIT 1
+        WHERE sh.id=?
         """,
-        (int(project_id),),
+        (int(shipment["id"]),),
     ).fetchone()
     item = dict(row) if row else {}
     if item:

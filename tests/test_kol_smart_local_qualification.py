@@ -610,11 +610,18 @@ def test_smart_preview_owns_30_target_and_filter_policy(
     assert captured["candidate_limit"] == 500
     assert captured["allow_backfill"] is False
     assert captured["dedupe"] is True
+    expected_geo = {
+        "creator_countries": ["US"],
+        "audience_markets": [],
+        "creator_mode": "require",
+        "audience_mode": "require",
+    }
     expected_policy = profile_recall_qualification.smart_local_policy(
         market="us",
         platforms=["youtube"],
         languages=["English"],
         profile_types=["gear reviewer"],
+        geo_constraints=expected_geo,
     )
     expected_policy["followers_filter"] = profile_recall_qualification.follower_filter_policy(
         followers_min=None,
@@ -623,6 +630,7 @@ def test_smart_preview_owns_30_target_and_filter_policy(
         unknown_policy=profile_recall_qualification.FOLLOWERS_UNKNOWN_PENDING,
     )
     assert captured["local_qualification_policy"] == expected_policy
+    assert captured["local_qualification_policy"]["geo_constraints"] == expected_geo
 
 
 def test_smart_worker_owns_same_local_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -705,11 +713,18 @@ def test_smart_worker_owns_same_local_contract(monkeypatch: pytest.MonkeyPatch) 
     assert captured["candidate_limit"] == 500
     assert captured["allow_backfill"] is False
     assert captured["dedupe"] is True
+    expected_geo = {
+        "creator_countries": ["US"],
+        "audience_markets": [],
+        "creator_mode": "require",
+        "audience_mode": "require",
+    }
     expected_policy = profile_recall_qualification.smart_local_policy(
         market="us",
         platforms=["youtube"],
         languages=["en", "Japanese"],
         profile_types=["creator", "mixed"],
+        geo_constraints=expected_geo,
     )
     expected_policy["followers_filter"] = profile_recall_qualification.follower_filter_policy(
         followers_min=None,
@@ -718,6 +733,7 @@ def test_smart_worker_owns_same_local_contract(monkeypatch: pytest.MonkeyPatch) 
         unknown_policy=profile_recall_qualification.FOLLOWERS_UNKNOWN_PENDING,
     )
     assert captured["local_qualification_policy"] == expected_policy
+    assert captured["local_qualification_policy"]["geo_constraints"] == expected_geo
     assert advance_call["smart_local_contract"] is True
     assert advance_call["body"]["limit"] == 30
     assert result["recall"]["local_qualification"] is local_contract

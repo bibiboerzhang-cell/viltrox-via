@@ -12,6 +12,9 @@
 """
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
+from threading import Event
 from typing import Any
 
 import pytest
@@ -477,23 +480,137 @@ def test_topup_never_calls_a_provider_inline() -> None:
         assert forbidden not in source, forbidden
 
 
-def test_pipeline_consumes_topup_after_the_results_are_assembled() -> None:
-    """位置即契约:统一召回(含 fallback)完成后才 advance,最后才补齐。"""
-    from pathlib import Path
+@pytest.mark.parametrize("scenario", [
+    "legacy_fallback", "query_cell_assembled", "hybrid_local_first",
+    "hybrid_online_first", "hybrid_local_failed", "saved", "fresh_network",
+])
+def test_pipeline_consumes_topup_after_the_results_are_assembled(
+    monkeypatch: pytest.MonkeyPatch, scenario: str,
+) -> None:
+    """Observe execution, not assignment spelling: assembled recall → advance → topup.
 
-    from app.domains.kol import profile_discovery_pipeline
+    The real provider-free runtime dispatches into a fake inventory reader;
+    the QueryCell case also executes the real first-round cell assembler.
+    Queue/session/provider seams are in-memory, with no live DB or provider.
+    """
+    from app.domains.kol import profile_discovery_pipeline as pipeline
+    from app.domains.kol.profile_discovery_pipeline_online import DiscoveryOutcome
+    from app.domains.kol.profile_discovery_pipeline_stages import PlanningState, RecallSetup, RecallState
 
-    source = Path(profile_discovery_pipeline.__file__).read_text(encoding="utf-8")
-    recall_at = source.index(
-        "recall_result = targeted_search_runtime.execute_local_search("
+    events: list[str] = []
+    observed: dict[str, Any] = {}
+    online_completed = Event()
+    hybrid = scenario.startswith("hybrid_")
+    candidates = [_candidate(17, ["country", "language"])]
+    cell = {"query_cell_id": "cell-street", "objective": "existing_evidence",
+            "segment": "street", "primary_query": "street photographer", "platforms": ["youtube"],
+            "round": 1, "raw_limit": 10, "required_evidence_groups": [], "brand_or_model_required": False}
+    cells = [cell] if scenario == "query_cell_assembled" else []
+    setup = RecallSetup(
+        context={"query_cells": cells, "search_brief": {"objective": "existing_evidence"}},
+        recall_kwargs={"query_text": "street photographer", "limit": 30, "candidate_limit": 500},
+        recall_filters={}, resolved_platforms=["youtube"], follower_filter={}, followers_min=None,
+        followers_max=None, follower_source="not_requested", query_cells=cells, query_cells_omitted=False,
     )
-    fallback_at = source.index(
-        "recall=profile_recall.recall_kol_profiles,",
-        recall_at,
-    )
-    advance_at = source.index("advance_result = advance_search_session_items(")
-    topup_at = source.index("enqueue_field_topup_for_candidates(")
-    assert recall_at < fallback_at < advance_at < topup_at
+    monkeypatch.setattr(pipeline.profile_discovery_pipeline_stages, "prepare_plan", lambda **_: PlanningState(
+        query="street photographer", operator_query="street photographer", operator_anchor={},
+        operator_platforms=["youtube"], operator_market=""))
+    monkeypatch.setattr(pipeline.profile_discovery_pipeline_stages, "prepare_recall", lambda *_: setup)
+
+    def recall(**kwargs: Any) -> dict[str, Any]:
+        events.append("fallback_read")
+        observed["recall_kwargs"] = kwargs
+        if scenario == "hybrid_online_first":
+            assert online_completed.wait(2), "online must not wait for local recall"
+        if scenario == "hybrid_local_failed":
+            raise RuntimeError("synthetic local inventory failure")
+        events.append("fallback_returned")
+        return {"method": "db_fts_fallback", "items": [{"kol_pool_id": 17, "platform": "youtube",
+            "handle": "photographer17", "bucket": "creator", "qualification_evidence": {"passed": True}}],
+            "diagnostics": {"field_topup_candidates": deepcopy(candidates)},
+            "local_qualification": {"schema": "smart_local_qualified_v2", "policy": {"policy_version": 2},
+                                    "evaluated_count": 1}}
+
+    monkeypatch.setattr(pipeline.profile_recall, "recall_kol_profiles", recall)
+    monkeypatch.setattr(pipeline.search_sessions, "update_search_lane", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(pipeline.search_sessions, "update_session_result_summary", lambda *_args, **_kwargs: {"id": 71})
+    monkeypatch.setattr(pipeline, "advance_search_session_items", lambda **kwargs: events.append("advance")
+                        or observed.update(advance=kwargs) or {"status": "ready", "selected": 0, "items": []})
+    monkeypatch.setattr(pipeline, "_enqueue_content_fit", lambda **_: events.append("content_fit"))
+    monkeypatch.setattr(pipeline, "_enqueue_video_backfill", lambda **_: events.append("video_backfill"))
+    staff = {"id": 23}
+    monkeypatch.setattr(pipeline.derived_job_actor, "derived_job_staff", lambda *_args, **_kwargs: staff)
+
+    def capture_topup(**kwargs: Any) -> dict[str, Any]:
+        events.append("topup")
+        observed["topup"] = deepcopy(kwargs)
+        return {"status": "dry_run", "applies_to_this_search": False}
+
+    monkeypatch.setattr(topup, "enqueue_field_topup_for_candidates", capture_topup)
+    monkeypatch.setattr(pipeline.profile_discovery_pipeline_stages, "finalize_pipeline",
+                        lambda **kwargs: events.append("finalize") or {"field_topup": kwargs["field_topup"]})
+    payload = {"query_text": "street photographer", "include_new_discovery": hybrid or scenario == "fresh_network",
+               "include_field_topup": True, "field_topup_dry_run": True}
+    if hybrid:
+        payload["search_mode"] = "hybrid"
+    elif scenario in {"saved", "fresh_network"}:
+        payload["search_mode"] = scenario
+        payload["include_new_discovery"] = True  # saved must still refuse all derived work.
+    original = deepcopy(payload)
+
+    async def execute() -> dict[str, Any]:
+        attached = asyncio.Event()
+        def attach(**kwargs: Any) -> RecallState:
+            events.append("recall_attached")
+            observed["attached"] = deepcopy(kwargs["recall_result"])
+            observed["lane_only"] = kwargs.get("lane_only", False)
+            attached.set()
+            result = kwargs["recall_result"]
+            return RecallState(result=result, session={"id": 71}, base_count=len(result["items"]),
+                               advance_limit=15, smart_local_30=False)
+        async def online(request: Any, **_: Any) -> DiscoveryOutcome:
+            if not request.payload.get("include_new_discovery"):
+                events.append("online_not_requested")
+                return DiscoveryOutcome(new_discovery=None, base_count=request.base_count)
+            events.append("online_started")
+            if scenario == "hybrid_local_first":
+                await asyncio.wait_for(attached.wait(), timeout=2)
+            events.append("online_completed")
+            online_completed.set()
+            return DiscoveryOutcome(new_discovery={"status": "ready", "items": []}, base_count=request.base_count)
+        monkeypatch.setattr(pipeline.profile_discovery_pipeline_stages, "attach_recall", attach)
+        monkeypatch.setattr(pipeline.profile_discovery_pipeline_online, "run_discovery", online)
+        return await pipeline.execute_smart_search_profile_advance_pipeline(session_id=71, payload=payload)
+
+    result = asyncio.run(execute())
+    assert payload == original
+    if scenario == "saved":
+        assert events == ["fallback_read", "fallback_returned", "recall_attached"]
+        assert result["field_topup"] is None and result["provider_calls_performed"] is False
+        return
+    assert events[-5:] == ["advance", "content_fit", "video_backfill", "topup", "finalize"]
+    assert events.count("advance") == events.count("topup") == 1
+    assert observed["topup"] == {"candidates": None if scenario in {"fresh_network", "hybrid_local_failed"} else candidates,
+                                 "session_id": 71, "staff": staff, "dry_run": True}
+    assert result["field_topup"] == {"status": "dry_run", "applies_to_this_search": False}
+    if scenario == "fresh_network":
+        assert "fallback_read" not in events
+    else:
+        assert events.count("fallback_read") == 1
+        assert observed["recall_kwargs"]["provider_free"] is True
+    if scenario == "hybrid_local_failed":
+        assert "recall_attached" not in events and "fallback_returned" not in events
+    else:
+        assert events.index("recall_attached") < events.index("advance")
+        assert observed["lane_only"] is hybrid
+    if hybrid or scenario == "fresh_network":
+        assert events.index("online_completed") < events.index("advance")
+    if scenario == "hybrid_local_first":
+        assert events.index("recall_attached") < events.index("online_completed")
+    if scenario == "hybrid_online_first":
+        assert events.index("online_completed") < events.index("fallback_returned")
+    if scenario == "query_cell_assembled":
+        assert observed["attached"]["method"] == "targeted_local_query_cells_v1"
 
 
 def test_ledger_marks_do_not_change_the_pass_set() -> None:

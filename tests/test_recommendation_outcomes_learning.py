@@ -147,8 +147,9 @@ def test_pool_action_shortlist_and_claim_write_outcomes_idempotently(learning_db
     assert out["first_action_at"] == stamp  # 首次动作时间保持最早
 
     contacted = actions.record_pool_action_feedback(1, "contact", staff={"id": 7})
-    assert contacted["outcome_node"] == "outreach_sent" and contacted["outcome_changed"] is True
-    assert outcomes._truthy(_outcome(conn, rec_id)["outreach_sent"])
+    assert contacted["feedback_type"] == "contact" and contacted["feedback_inserted"] is True
+    assert contacted["outcome_node"] == "" and contacted["outcome_changed"] is False
+    assert outcomes.get_outcome(rec_id)["outcome"]["outreach_sent"] is None
 
     unmapped = actions.record_pool_action_feedback(1, "unfavorite", staff={"id": 7})
     assert unmapped["outcome_node"] == "" and unmapped["outcome_changed"] is False
@@ -210,11 +211,12 @@ def test_assignment_stage_and_touch_sync_map_to_outcomes(learning_db, monkeypatc
     result = outcome_sync.sync_action_outcomes()
     assert result["assignments"]["no_recommendation"] == 1
     assert result["assignments"]["unmapped_stage"] == 1
-    assert result["assignments"]["changed"] == 2  # device_sent → outreach_sent + agreement_reached
-    assert result["touches"]["changed"] == 0      # outreach_sent 已由阶段链置位 → 零写
+    assert result["assignments"]["changed"] == 1  # Existing agreement preference, never transport proof.
+    assert result["touches"]["changed"] == 0      # Manual touch is not a send receipt.
     assert result["feedback"]["changed"] == 1
     out = _outcome(conn, rec_id)
-    assert outcomes._truthy(out["outreach_sent"]) and outcomes._truthy(out["agreement_reached"])
+    assert not outcomes._truthy(out["outreach_sent"]) and outcomes._truthy(out["agreement_reached"])
+    assert outcomes.get_outcome(rec_id)["outcome"]["outreach_sent"] is None
     assert outcomes._truthy(out["was_rejected"]) and out["rejected_at"].startswith("2026-07-06")
     assert out["agreement_at"].startswith("2026-07-05")  # 事件自身时间戳,不是「现在」
     assert not outcomes._truthy(out["content_published"])
@@ -343,7 +345,7 @@ def test_label_semantics_and_fit_not_activated_below_30(learning_db, monkeypatch
     assert rerank_fit.label_for_outcome({"was_claimed": 1}, recommended_at="2026-07-30T00:00:00Z", now=now) == (1, ["was_claimed"])
     assert rerank_fit.label_for_outcome({"was_rejected": "t"}, recommended_at="2026-07-30T00:00:00Z", now=now) == (0, ["was_rejected"])
     assert rerank_fit.label_for_outcome({}, recommended_at="2026-07-30T00:00:00Z", now=now) == (None, [])
-    assert rerank_fit.label_for_outcome(None, recommended_at="2026-07-01T00:00:00Z", now=now) == (0, ["silent_after_window"])
+    assert rerank_fit.label_for_outcome(None, recommended_at="2026-07-01T00:00:00Z", now=now) == (None, [])
 
     assert rerank_shadow.tables_ready() is True
     for pool_id in range(10, 22):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+from app.domains.kol.operator_search_spec import SCHEMA as OPERATOR_SPEC_SCHEMA, online_policy_inputs, requires_qualified_online
 
 DiscoverCallable = Callable[..., Awaitable[dict[str, Any]]]
 AnnotateCallable = Callable[[dict[str, Any]], dict[str, Any]]
@@ -64,9 +65,14 @@ class _EvidenceLedger:
     round_legs: list[str] = field(default_factory=list)
     round_cursor: dict[str, Any] = field(default_factory=dict)
     round_yield: dict[str, int] = field(default_factory=lambda: {"last": 0})
+    query_cell_runs: list[dict[str, Any]] = field(default_factory=list)
+    query_cell_run_counters: dict[str, int] = field(default_factory=dict)
+    _targeted: dict[str, Any] = field(default_factory=dict)
 
     def targeted_state(self) -> dict[str, Any]:
-        return {
+        # Preflight reservations/deadlines/stop flags are scalar state too.
+        # A new mapping per callback would discard them between gate and fetch.
+        self._targeted.update({
             "round_forecasts": self.round_forecasts,
             "term_rounds": self.term_rounds,
             "observed_candidates": self.observed_candidates,
@@ -74,7 +80,34 @@ class _EvidenceLedger:
             "round_legs": self.round_legs,
             "round_cursor": self.round_cursor,
             "round_yield": self.round_yield,
-        }
+            "query_cell_runs": self.query_cell_runs,
+            "query_cell_run_counters": self.query_cell_run_counters,
+        })
+        return self._targeted
+
+
+def _hybrid_lane_kwargs(payload: dict[str, Any]) -> dict[str, bool]:
+    return {"lane_only": True} if (
+        payload.get("search_mode") == "hybrid" and payload.get("include_new_discovery") is True
+    ) else {}
+
+
+def _provider_policy_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
+    """Only the worker-rebuilt contract determines provider hints and clocks."""
+    from app.domains.kol.profile_recall_search_spec import operator_filter_spec
+    from app.domains.kol.search_relaxation import max_video_age_days
+    from app.services.intelligence.account_search_provider_policy import build_provider_discovery_policy
+
+    spec = payload.get("operator_search_spec")
+    if not isinstance(spec, dict) or spec.get("schema") != OPERATOR_SPEC_SCHEMA:
+        return {}
+    inputs = online_policy_inputs(payload)
+    languages = operator_filter_spec(languages=inputs.get("languages"))["languages"]
+    return {"provider_discovery_policy": build_provider_discovery_policy(
+        language_filter=languages,
+        recent_activity_max_age_days=max_video_age_days(inputs.get("gate_mode")),
+        discovery_max_age_days=45,
+    )}
 
 
 def _discovery_kwargs(
@@ -99,6 +132,7 @@ def _discovery_kwargs(
         if deps.text(cell.get("primary_query") or cell.get("segment_label") or cell.get("segment"))
     ]
     return {
+        **_provider_policy_kwargs(request.payload),
         "query_text": request.query,
         "platforms": request.resolved_platforms,
         "platform_hint": deps.text(request.payload.get("platform")),
@@ -126,6 +160,7 @@ class _StrictOnlineRunner:
         favorite_identity_keys: set[str],
         discover: DiscoverCallable,
         deps: OnlineDependencies,
+        bounded_legacy: bool = False,
     ) -> None:
         self.request = request
         self.discovery_kwargs = discovery_kwargs
@@ -133,6 +168,9 @@ class _StrictOnlineRunner:
         self.favorite_identity_keys = favorite_identity_keys
         self.discover = discover
         self.deps = deps
+        self.bounded_legacy = bounded_legacy
+        self._legacy_fetch_started = False
+        self.legacy_limit = max(1, min(deps.int_value(request.payload.get("new_discovery_limit"), 15), 50))
         self.per_platform_limit = max(
             1,
             min(
@@ -156,6 +194,17 @@ class _StrictOnlineRunner:
         )
 
     async def fetch_batch(self, *, round_no: int, limit: int, cursor: Any) -> dict[str, Any]:
+        if self.bounded_legacy:
+            if round_no != 1 or self._legacy_fetch_started:
+                return {"status": "empty", "new_creators": [], "provider_calls": False, "has_more": False}
+            self._legacy_fetch_started = True
+            batch = await _legacy_discovery(
+                request=self.request, discovery_kwargs=self.discovery_kwargs,
+                ledger=self.ledger, favorite_identity_keys=self.favorite_identity_keys,
+                discover=self.discover, annotate_priority=lambda result: result,
+                deps=self.deps, auto_enroll=False,
+            )
+            return {**batch, "has_more": False}
         if self.request.query_cells:
             return await self.deps.profile_discovery_targeted_batch.fetch_targeted_round(
                 round_no=round_no,
@@ -165,6 +214,7 @@ class _StrictOnlineRunner:
                 state=self.ledger.targeted_state(),
                 favorite_identity_keys=self.favorite_identity_keys,
                 discover=self.discover,
+                candidate_limit=limit,
             )
 
         legs = self.deps.profile_discovery_rounds.platforms_for_round(
@@ -234,6 +284,7 @@ class _StrictOnlineRunner:
         return batch
 
     async def run(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        policy_inputs = online_policy_inputs(self.request.payload)
         round_gate = self.deps.profile_discovery_targeted_batch.build_pipeline_round_gate(
             query_cells=self.request.query_cells,
             discovery_kwargs=self.discovery_kwargs,
@@ -248,14 +299,13 @@ class _StrictOnlineRunner:
             policy=self.deps.profile_online_qualification.online_policy(
                 market=self.request.normalized_market,
                 platforms=self.request.resolved_platforms,
-                languages=(
-                    self.request.payload.get("languages")
-                    or self.request.payload.get("content_languages")
-                ),
-                profile_types=(
-                    self.request.payload.get("profile_types")
-                    or self.request.payload.get("kol_types")
-                ),
+                languages=policy_inputs.get("languages"),
+                profile_types=policy_inputs.get("profile_types"),
+                gate_mode=policy_inputs.get("gate_mode", "relaxed"),
+                hide_team_favorites=policy_inputs.get("hide_team_favorites"),
+                geo_constraints=policy_inputs.get("geo_constraints"),
+                **({"provider_discovery_policy": self.discovery_kwargs["provider_discovery_policy"]}
+                   if "provider_discovery_policy" in self.discovery_kwargs else {}),
                 exclude_chinese=bool(self.request.payload.get("exclude_chinese", True)),
                 followers_min=self.request.followers_min,
                 followers_max=self.request.followers_max,
@@ -266,11 +316,13 @@ class _StrictOnlineRunner:
                 ),
             ),
             fetch_batch=self.fetch_batch,
-            candidate_budget=150,
-            max_provider_rounds=(
-                self.deps.profile_online_qualification.ONLINE_MAX_PROVIDER_ROUNDS
-            ),
-            round_gate=round_gate,
+            candidate_budget=self.legacy_limit if self.bounded_legacy else 150,
+            max_provider_rounds=(1 if self.bounded_legacy else
+                self.deps.profile_online_qualification.ONLINE_MAX_PROVIDER_ROUNDS),
+            round_gate=None if self.bounded_legacy else round_gate,
+            **({"round_observer": self.deps.profile_discovery_targeted_batch.build_query_cell_round_observer(
+                query_cells=self.request.query_cells, state=self.ledger.targeted_state(),
+            )} if self.request.query_cells and not self.bounded_legacy else {}),
             exhaustion_reason=self.deps.profile_discovery_targeted_batch.exhaustion_reason(
                 self.request.query_cells
             ),
@@ -280,14 +332,18 @@ class _StrictOnlineRunner:
                 else None
             ),
         )
-        online_result = self.deps.profile_discovery_targeted_batch.finalize_online_result(
-            online_result,
-            query_cells=self.request.query_cells,
-            query_cells_omitted=self.request.query_cells_omitted,
-            search_brief=self.request.payload.get("search_brief"),
-            objective=self.request.payload.get("objective"),
-            state=self.ledger.targeted_state(),
-        )
+        if not self.bounded_legacy:
+            online_result = self.deps.profile_discovery_targeted_batch.finalize_online_result(
+                online_result,
+                query_cells=self.request.query_cells,
+                query_cells_omitted=self.request.query_cells_omitted,
+                search_brief=self.request.payload.get("search_brief"),
+                objective=self.request.payload.get("objective"),
+                state=self.ledger.targeted_state(),
+            )
+        else:
+            online_result["execution_lane"] = "qualified_legacy_single_batch"
+            online_result["provider_round_limit"] = 1
         online_result["enrichment_queue"] = {
             "status": "not_enriched",
             "async": False,
@@ -304,6 +360,7 @@ class _StrictOnlineRunner:
         self.deps.search_sessions.attach_online_qualified_result(
             int(self.request.session_id),
             online_result,
+            **_hybrid_lane_kwargs(self.request.payload),
         )
         online_contract = {
             key: value for key, value in online_result.items() if key != "items"
@@ -336,6 +393,7 @@ async def _legacy_discovery(
     discover: DiscoverCallable,
     annotate_priority: AnnotateCallable,
     deps: OnlineDependencies,
+    auto_enroll: bool = True,
 ) -> dict[str, Any]:
     new_discovery = await discover(
         **discovery_kwargs,
@@ -354,6 +412,7 @@ async def _legacy_discovery(
             ),
         ),
         per_platform_limits=request.payload.get("new_discovery_per_platform_limits"),
+        auto_enroll=auto_enroll,
     )
     ledger.term_rounds.append(
         deps.profile_discovery_evidence.observe_round(
@@ -413,6 +472,7 @@ def _attach_legacy_progress(
                 **contract,
             },
         },
+        **_hybrid_lane_kwargs(request.payload),
     )
 
 
@@ -475,6 +535,7 @@ def _record_diagnostics(
                 )
             ),
         },
+        **_hybrid_lane_kwargs(request.payload),
     )
 
 
@@ -489,7 +550,11 @@ async def run_discovery(
         return DiscoveryOutcome(new_discovery=None, base_count=request.base_count)
 
     discovery_kwargs = _discovery_kwargs(request, deps)
-    strict_online = request.payload.get("_smart_online_30_contract") is True
+    named_strict = request.payload.get("_smart_online_30_contract") is True
+    bounded_legacy = not named_strict and requires_qualified_online(
+        request.payload, followers_min=request.followers_min, followers_max=request.followers_max,
+    )
+    strict_online = named_strict or bounded_legacy
     ledger = _EvidenceLedger()
     favorite_identity_keys = deps.recall_favorite_exclusion.favorited_identity_keys()
     online_contract: dict[str, Any] | None = None
@@ -501,6 +566,7 @@ async def run_discovery(
             favorite_identity_keys=favorite_identity_keys,
             discover=discover,
             deps=deps,
+            bounded_legacy=bounded_legacy,
         )
         new_discovery, online_contract = await runner.run()
     else:
