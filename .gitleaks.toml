@@ -47,3 +47,11 @@ condition = "AND"
 regexTarget = "secret"
 regexes = ['''^synthetic-fixture-900001$''']
 paths = ['''^frontend/tests/browser/system-optimization/fixture-state\.ts$''']
+
+[[allowlists]]
+description = "Exact reviewed migration 307 SHA256, not an API credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*"307_users_token_version\.sql": "5ca5b5809828ffab06afa6e6dcff918945d07e6a1bbb3865ad8b5abc5c6a0d7f",\s*$''']
+paths = ['''^scripts/ops/release_forward_policy\.py$''']
