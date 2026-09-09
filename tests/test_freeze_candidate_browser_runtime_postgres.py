@@ -61,6 +61,7 @@ def test_candidate_browser_runtime_postgres_cleanup_refuses_unsafe_roots_and_rep
     runtime = _runtime_module()
     outside = tmp_path / "vkpi-candidate-browser-runtime.outside"
     (outside / "runtime" / "data" / "postgres").mkdir(parents=True)
+    outside.chmod(0o755)  # Explicitly unsafe even when the caller uses umask 077.
     (outside / "runtime" / "data" / "postgres" / "postmaster.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
     with pytest.raises(runtime.DeployGateRuntimeError, match="0700"):
         runtime.stop_candidate_browser_runtime_postgres(outside)
