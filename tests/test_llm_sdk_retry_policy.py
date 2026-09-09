@@ -155,4 +155,3 @@ def test_google_installed_sdk_request_override_cannot_retry_after_first_error(mo
             client.close()
     assert len(requests) == 1
     assert source.http_options.retry_options.attempts == 3
-
