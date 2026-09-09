@@ -681,9 +681,9 @@ describe("SmartKolInputPanel URL result mapping", () => {
     await waitFor(() => expect(api.getKolPoolAccountDossier).toHaveBeenCalledWith("token", 13053));
   });
 
-  it("hydrates an account URL from the matched pool item without requiring raw-field expansion", async () => {
+  it.each(["immediate", "pool", "recommendation"])("hydrates an account URL from the matched pool item without requiring raw-field expansion (%s response)", async (delayedSource) => {
     const onOpen = vi.fn();
-    api.getKolPoolItem.mockResolvedValueOnce({
+    const profileResponse = {
       item: {
         id: 13053,
         platform: "youtube",
@@ -699,7 +699,10 @@ describe("SmartKolInputPanel URL result mapping", () => {
         token: "top-secret-token",
         viltrox_fit_score: 99,
       },
-    });
+    };
+    const pending = deferred<Record<string, unknown>>();
+    api.getKolPoolItem.mockReturnValueOnce(delayedSource === "pool" ? pending.promise : Promise.resolve(profileResponse));
+    if (delayedSource === "recommendation") api.getKolRecommendationCard.mockReturnValueOnce(pending.promise);
     renderSummary({
       execute: true,
       url: { input: "https://www.youtube.com/@ItiJarve", normalized: "https://www.youtube.com/@ItiJarve" },
@@ -717,7 +720,15 @@ describe("SmartKolInputPanel URL result mapping", () => {
     }, onOpen);
 
     await waitFor(() => expect(api.getKolPoolItem).toHaveBeenCalledWith("token", 13053, false));
-    expect(screen.getByText("87K 粉")).toBeTruthy();
+    // Calls starting is not hydration: both Promise.all responses must settle and React must commit.
+    if (delayedSource !== "immediate") {
+      expect(screen.queryByText("87K 粉")).toBeNull();
+      await act(async () => {
+        pending.resolve(delayedSource === "pool" ? profileResponse : {});
+        await pending.promise;
+      });
+    }
+    expect(await screen.findByText("87K 粉")).toBeTruthy();
     expect(screen.getByText("64 帖")).toBeTruthy();
     expect(screen.getAllByText("Camera creator and landscape filmmaker").length).toBeGreaterThan(0);
     expect(screen.getByText(/原始字段 \d+/)).toBeTruthy();
@@ -726,7 +737,7 @@ describe("SmartKolInputPanel URL result mapping", () => {
     expect(screen.queryByText("top-secret-token")).toBeNull();
     // Fit is an explicit decision field and may be shown only inside the labelled recommendation block;
     // private/raw fields remain filtered from the profile card.
-    expect(screen.getByText("账号 Fit（库内模型/规则）")).toBeTruthy();
+    expect(await screen.findByText("账号 Fit（库内模型/规则）")).toBeTruthy();
     expect(screen.getByText("99")).toBeTruthy();
     fireEvent.click(screen.getByText("查看详情 →"));
     expect(onOpen).toHaveBeenCalledTimes(1);
