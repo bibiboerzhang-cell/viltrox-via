@@ -4,14 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
-
-class _Config:
-    def __init__(self, **values: Any) -> None:
-        self.values = dict(values)
-
-    def model_copy(self, *, update: dict[str, Any]):
-        return _Config(**{**self.values, **update})
+from google.genai import types as genai_types
 
 
 class _Reservations:
@@ -98,7 +91,12 @@ def _call(
     return llm_production.generate_google_content(
         client=client,
         contents=[SimpleNamespace(uri="https://example.invalid/video"), "prompt"],
-        config=_Config(media_resolution="LOW"),
+        config=genai_types.GenerateContentConfig(
+            media_resolution=genai_types.MediaResolution.MEDIA_RESOLUTION_LOW,
+            http_options=genai_types.HttpOptions(
+                timeout=12_000, retry_options=genai_types.HttpRetryOptions(attempts=3),
+            ),
+        ),
         model="gemini-3.6-flash",
         purpose="audit_video_analysis",
         max_output_tokens=999_999,
@@ -175,8 +173,14 @@ def test_uri_and_file_attempts_each_reserve_settle_once_without_double_budget(
         "youtube_file_fallback_generation",
     ]
     assert all(
-        kwargs["config"].values["max_output_tokens"]
+        kwargs["config"].max_output_tokens
         == llm_production.GOOGLE_GENERATE_MAX_OUTPUT_TOKENS_HARD_CAP
+        for kwargs in provider_kwargs
+    )
+    assert all(kwargs["config"].http_options.retry_options.attempts == 1 for kwargs in provider_kwargs)
+    assert all(kwargs["config"].http_options.timeout == 12_000 for kwargs in provider_kwargs)
+    assert all(
+        kwargs["config"].media_resolution == genai_types.MediaResolution.MEDIA_RESOLUTION_LOW
         for kwargs in provider_kwargs
     )
     assert [row["state"] for row in attempt_log] == ["settled", "settled"]

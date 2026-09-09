@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from google.genai import types as genai_types
 
 PRIMARY = "gemini-3.6-flash"
 LITE = "gemini-3.5-flash-lite"
@@ -95,14 +96,6 @@ def test_ready_subchain_from_preflight_candidates() -> None:
 # --------------------------------------------------------- llm_production
 
 
-class _Config:
-    def __init__(self, **values: Any) -> None:
-        self.values = dict(values)
-
-    def model_copy(self, *, update: dict[str, Any]):
-        return _Config(**{**self.values, **update})
-
-
 class _Reservations:
     def __init__(self) -> None:
         self.events: list[tuple[str, Any]] = []
@@ -175,7 +168,12 @@ def _generate(llm_production, *, client: _Client, model: str):
     return llm_production.generate_google_content(
         client=client,
         contents=[SimpleNamespace(uri="https://example.invalid/video"), "prompt"],
-        config=_Config(media_resolution="LOW"),
+        config=genai_types.GenerateContentConfig(
+            media_resolution=genai_types.MediaResolution.MEDIA_RESOLUTION_LOW,
+            http_options=genai_types.HttpOptions(
+                timeout=12_000, retry_options=genai_types.HttpRetryOptions(attempts=3),
+            ),
+        ),
         model=model,
         purpose=VIDEO_TASK,
         max_output_tokens=4096,
@@ -191,6 +189,9 @@ def test_google_adapter_accepts_fallback_chain_member_and_ledgers_actual_model(m
     client = _Client(LITE)
     _generate(llm_production, client=client, model=LITE)
     assert client.calls and client.calls[0]["model"] == LITE
+    assert client.calls[0]["config"].http_options.retry_options.attempts == 1
+    assert client.calls[0]["config"].http_options.timeout == 12_000
+    assert client.calls[0]["config"].media_resolution == genai_types.MediaResolution.MEDIA_RESOLUTION_LOW
     reserve = next(kwargs for name, kwargs in reservations.events if name == "reserve")
     assert reserve["model"] == LITE
     assert reserve["metadata"]["task_binding_role"] == "fallback"

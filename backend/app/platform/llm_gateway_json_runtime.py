@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
-from app.platform.llm_release_fence import assert_llm_provider_io_allowed
+from .llm_release_fence import assert_llm_provider_io_allowed
 
 from . import llm_gateway_invoke_limits as _limits
 from .llm_gateway_call_hooks import cache_binding_allowed, cache_route_policy

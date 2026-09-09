@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
-from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed
+from .llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed
 
 from . import llm_gateway_invoke_limits as _limits
 from . import llm_gateway_json_attempt_limits as _attempt_limits

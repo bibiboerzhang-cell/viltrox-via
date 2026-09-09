@@ -7,6 +7,9 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       ENVIRONMENT: test
       PYTHONPATH: backend
@@ -25,8 +28,12 @@ jobs:
           # repository snapshot on every push.
           fetch-depth: 0
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
+          # Authenticated owner lookup avoids the shared runner's anonymous
+          # API limit being mistaken for an organization-license requirement.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
           GITLEAKS_VERSION: "8.30.1"
       - uses: actions/setup-python@v6
