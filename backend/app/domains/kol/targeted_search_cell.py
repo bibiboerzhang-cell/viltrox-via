@@ -5,6 +5,7 @@ import math
 from collections.abc import Iterable
 from typing import Any
 
+from app.domains.kol.targeted_search_scene_query import preserve_controlled_scene_phrases
 from app.domains.kol.targeted_search_terms import (
     build_locked_term_groups,
     required_role_terms_for,
@@ -78,6 +79,9 @@ def build_query_cell(
     prospective = objective == PROSPECTIVE_GROWTH
     required_scene_terms = [] if role_only else (_dedupe(scene_terms) or [key])
     required_role_terms = _dedupe(role_terms) or required_role_terms_for(primary)
+    if locked and source in {"operator_text", "operator_text_exact", "operator_filter"}:
+        primary = preserve_controlled_scene_phrases(primary, required_scene_terms)
+        fallbacks = [preserve_controlled_scene_phrases(value, required_scene_terms) for value in _dedupe(fallbacks)]
     required_evidence_groups = ["market_activation"]
     if required_scene_terms:
         required_evidence_groups.insert(0, "segment_use_case")

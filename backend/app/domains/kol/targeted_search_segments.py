@@ -320,6 +320,25 @@ def _merged_clauses(raw: str) -> tuple[list[str], bool]:
     return ([_text(" ".join(clauses))] if should_merge else clauses), explicit_all
 
 
+def _expand_shared_photography_suffix(raw: str) -> str:
+    """Expand known Chinese scene coordination, not lens/product modifiers.
+
+    In a people request, ``微距与产品摄影`` shares the final ``摄影``.
+    Require adjacent controlled scenes and that explicit trailing suffix;
+    ``微距镜头与产品摄影`` therefore cannot create a macro scene.
+    """
+    if not has_creator_role(raw):
+        return raw
+    aliases = sorted({
+        alias for _, values, _ in _SEGMENT_RULES for alias in values
+        if re.fullmatch(r"[\u4e00-\u9fff]+摄影", alias)
+    }, key=len, reverse=True)
+    stems = "|".join(re.escape(alias[:-2]) for alias in aliases)
+    complete = "|".join(re.escape(alias) for alias in aliases)
+    pattern = rf"({stems})(?=\s*(?:[和与及、]|或者|或)\s*(?:{complete}))"
+    return re.sub(pattern, r"\1摄影", raw)
+
+
 def _matched_rule_record(
     key: str,
     matched: str,
@@ -475,7 +494,7 @@ def extract_explicit_segments(query: Any = "", body: Any = None) -> list[dict[st
         _segment_record(value, source="operator_filter", locked=True)
         for value in explicit_values
     ]
-    raw = affirmative_search_text(query).lower()
+    raw = _expand_shared_photography_suffix(affirmative_search_text(query).lower())
     clauses, explicit_all = _merged_clauses(raw)
     for clause in clauses:
         records.extend(_clause_records(

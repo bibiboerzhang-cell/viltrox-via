@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 import importlib.util
 import inspect
 import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -114,6 +116,101 @@ def test_hermetic_fixture_requires_every_query_to_return_30() -> None:
         benchmark.assert_hermetic_fixture_target(invalid)
 
 
+@pytest.mark.parametrize("query_index", range(5))
+def test_legacy_plan_projection_preserves_real_query_constraints_and_runtime(query_index) -> None:
+    from app.domains.kol import smart_query_planner, targeted_search_runtime
+
+    query = benchmark.load_golden(benchmark.DEFAULT_GOLDEN)[query_index]
+    body = {"input": query["query"], "objective": "existing_evidence",
+            "market": query["market"], "platforms": query["platforms"]}
+    # Real provider-free fallback construction is pure; no catalog, DB or provider.
+    original = smart_query_planner._fallback_plan(
+        query["query"], reason="provider_free_initial", body=body)
+    snapshot = deepcopy(original)
+    kwargs = {"body": body, "recall_filters": {}, "market": query["market"],
+              "platforms": query["platforms"]}
+    projected = benchmark._legacy_compatibility_plan(original)
+    for key in ("search_query", "search_queries", "original_query", "product_focus",
+                "target_persona", "follower_filter", "explicit_segments", "platforms", "market"):
+        assert projected[key] == original[key]
+    for key in ("product", "follower_filter", "explicit_segments", "platforms"):
+        assert projected["search_brief"][key] == original["search_brief"][key]
+    for layer in (projected, projected["search_brief"]):
+        assert not {"query_cells", "query_plan_semantics", "authoritative_query_field",
+                    "first_round_strategy", "search_spec_version"}.intersection(layer)
+    context = targeted_search_runtime.prepare_local_search(plan=projected, **kwargs)
+    assert context["query_cells"] == []
+    calls = []
+    result = targeted_search_runtime.execute_local_search(
+        context=context, recall_kwargs={"query_text": projected["search_query"]},
+        recall=lambda **kw: calls.append(kw) or {"items": [], "shortfall": 30})
+    assert calls == [{"query_text": original["search_query"], "provider_free": True}]
+    assert result == {"items": [], "shortfall": 30}  # No manufactured target rows.
+    projected["search_brief"]["platforms"].append("synthetic_mutation")
+    assert original == snapshot
+
+
+def test_fixed_historical_invalid_plan_is_still_rejected_outside_harness() -> None:
+    from app.domains.kol import targeted_search_runtime
+
+    plan = {"objective": "existing_evidence", "search_query": "macro product photography",
+            "query_cells": [{"query_cell_id": "historical_product",
+                             "primary_query": "product content creator"}],
+            "query_plan_semantics": {"status": "invalid", "query_cell_contracts": [{
+                "validation": {"status": "invalid", "execution_allowed": False,
+                               "issues": ["scene_terms_missing_from_executed_query"]}}]}}
+    snapshot = deepcopy(plan)
+    for in_brief in (False, True):
+        candidate = {"objective": plan["objective"], "search_brief": plan} if in_brief else plan
+        with pytest.raises(ValueError, match="invalid_query_plan_semantics"):
+            targeted_search_runtime.prepare_local_search(
+                plan=candidate, body={}, recall_filters={}, market="US", platforms=["youtube"])
+        projected = benchmark._legacy_compatibility_plan(candidate)
+        assert targeted_search_runtime.prepare_local_search(
+            plan=projected, body={}, recall_filters={}, market="US", platforms=["youtube"])["query_cells"] == []
+    assert plan == snapshot
+
+
+def test_legacy_projection_does_not_remove_clarification_or_accept_prospective_plan() -> None:
+    plan = {"status": "needs_clarification", "query_cells": [], "clarification": {"reason": "missing"}}
+    assert benchmark._legacy_compatibility_plan(plan) == plan
+    with pytest.raises(ValueError, match="benchmark_legacy_objective_required"):
+        benchmark._legacy_compatibility_plan({"objective": "prospective_growth"})
+
+
+def test_runtime_barriers_project_planner_only_and_restore_after_failure(monkeypatch) -> None:
+    source = {"objective": "existing_evidence", "search_query": "macro product photography",
+              "query_cells": [{"primary_query": "product content creator"}],
+              "query_plan_semantics": {"status": "invalid"}}
+    original_planner = lambda *_args, **_kwargs: source
+    planner = SimpleNamespace(plan_text_query_provider_free=original_planner)
+    monkeypatch.setattr(benchmark, "vkpi_kol_pool_search",
+                        SimpleNamespace(kol_smart_query_planner=planner), raising=False)
+    modules = {
+        "profile_recall": ("get_conn", "_embed_query", "_search_qdrant", "_llm_rerank_buckets"),
+        "product_catalog": ("get_conn",), "llm_gateway": ("invoke",),
+        "search_sessions": ("create_session", "attach_recall_result"),
+        "targeted_search_runtime": ("prepare_local_search", "execute_local_search"),
+    }
+    for module, names in modules.items():
+        monkeypatch.setattr(benchmark, module, SimpleNamespace(**{name: object() for name in names}), raising=False)
+    runtime = benchmark.targeted_search_runtime
+    original_execute, original_prepare = runtime.execute_local_search, runtime.prepare_local_search
+    monkeypatch.setenv("RECALL_LLM_RERANK_ENABLED", "prior_value")
+    with pytest.raises(RuntimeError, match="fixture_failure"):
+        with benchmark._runtime_barriers(object()):
+            assert planner.plan_text_query_provider_free()["search_query"] == source["search_query"]
+            assert "query_plan_semantics" not in planner.plan_text_query_provider_free()
+            assert runtime.execute_local_search is original_execute
+            assert runtime.prepare_local_search is original_prepare
+            with pytest.raises(RuntimeError, match="benchmark_forbidden_call:llm_gateway"):
+                benchmark.llm_gateway.invoke()
+            raise RuntimeError("fixture_failure")
+    assert planner.plan_text_query_provider_free is original_planner
+    assert source["query_plan_semantics"] == {"status": "invalid"}
+    assert benchmark.os.environ["RECALL_LLM_RERANK_ENABLED"] == "prior_value"
+
+
 @pytest.mark.pg
 def test_hermetic_runtime_fixture_returns_30_for_every_golden_query(
     pg_dsn: str,
@@ -135,6 +232,8 @@ def test_hermetic_runtime_fixture_returns_30_for_every_golden_query(
     assert report["claim_status"] == "runtime_algorithm_legacy_compatibility_only"
     assert report["scope"]["legacy_smart_local_compatibility_executed"] is True
     assert report["scope"]["prospective_targeted_query_cells_tested"] is False
+    assert report["scope"]["query_plan_semantics_tested"] is False
+    assert report["scope"]["targeted_plan_fields_projected_out_for_legacy_benchmark"] is True
 
 
 @pytest.mark.parametrize(

@@ -282,13 +282,13 @@ _last_reap_monotonic: float = 0.0
 
 
 def reap_stale_reservations(*, ttl_hours: float | None = None) -> int:
-    """超龄开放态预约(reserved/provider_started/unknown)→ 'expired',释放占用额度。
+    """Expire only stale reservations whose provider-start fence was never set.
 
-    2026-07-18 体检修:'unknown' 的 fail-closed 设计(结果不可证则继续占额度)
-    没有任何回收器,81 笔僵尸预约永久占 $5.84,雷达 $1 日闸已被吃 16%——
-    单调恶化直至相关 scope 永久 budget_blocked。真实 provider 调用分钟级落定,
-    TTL 24h(VKPI_LLM_RESERVATION_TTL_HOURS 可调)远在安全边界外。
-    'expired'(迁移 273)不被 _open_reserved_for_scope 计入;行保留可审计。
+    Provider I/O requires a committed reserved -> provider_started transition.
+    This atomic predicate races safely with that transition: an expired row
+    cannot start, and a started/unknown row remains held until reconciled.
+    Age is not evidence of zero spend; contradictory settlement fields also
+    retain the allowance. Expired rows remain available for historical audit.
     """
     import os as _os
 
@@ -302,7 +302,10 @@ def reap_stale_reservations(*, ttl_hours: float | None = None) -> int:
         """
         UPDATE vkpi_llm_budget_reservations
         SET state='expired', updated_at=NOW()
-        WHERE state IN ('reserved','provider_started','unknown')
+        WHERE state='reserved'
+          AND provider_started_at IS NULL
+          AND settled_at IS NULL
+          AND actual_cost_usd IS NULL
           AND reserved_at < NOW() - (? * INTERVAL '1 hour')
         """,
         (hours,),
@@ -318,7 +321,7 @@ def reap_stale_reservations(*, ttl_hours: float | None = None) -> int:
 
 
 def _maybe_reap_stale_reservations() -> None:
-    """机会式触发(每进程节流 10 分钟),预约路径自愈,不依赖调度器活着。"""
+    """机会式回收未开始的旧预约(每进程节流 10 分钟),不回收未确认费用。"""
     global _last_reap_monotonic
     import time as _time
 
@@ -414,8 +417,8 @@ def reserve_llm_budget(
             estimated_cost_usd=float(estimate),
         ) from exc
 
-    # 2026-07-18:预约前机会式回收僵尸预约(节流 10 分钟),防 unknown 泄漏
-    # 单调吃满 scope 日闸。独立事务,失败不阻断预约主流程。
+    # Opportunistically expire only unstarted reservations (10-minute throttle).
+    # Unknown provider spend stays held. This separate transaction may fail safely.
     if not local_evaluation_no_reap:
         _maybe_reap_stale_reservations()
 

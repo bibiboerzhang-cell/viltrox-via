@@ -311,7 +311,7 @@ def test_z1_first_round_covers_requested_workflows_without_brand_or_model_terms(
     assert [cell["primary_query"] for cell in cells] == [
         "motorsport photographer",
         "food chef content creator",
-        "wedding event content creator",
+        "wedding event content creator event photography",
     ]
     assert cells[2]["required_scene_terms"] == ["wedding", "event"]
     assert cells[2]["scene_match_mode"] == "all"

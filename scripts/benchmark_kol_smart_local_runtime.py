@@ -17,6 +17,7 @@ import argparse
 import asyncio
 from collections import Counter
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
@@ -360,12 +361,36 @@ def _tripwire(label: str):
     return blocked
 
 
+def _legacy_compatibility_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Project only this harness's legacy plan; never certify a QueryCell plan.
+
+    The current planner adds targeted fields even for existing_evidence.  They
+    are outside this benchmark's scope and must not survive as stale authority
+    while measuring the legacy query.  All query text and operator constraints
+    remain intact; the real runtime still validates and executes this projection.
+    """
+    projected = deepcopy(plan)
+    if projected.get("status") == "needs_clarification":
+        return projected
+    if projected.get("objective") != "existing_evidence":
+        raise ValueError("benchmark_legacy_objective_required")
+    for layer in (projected, projected.get("search_brief")):
+        if not isinstance(layer, dict):
+            continue
+        for key in ("query_cells", "query_plan_semantics", "first_round_strategy",
+                    "authoritative_query_field", "search_spec_version"):
+            layer.pop(key, None)
+    projected["benchmark_plan_scope"] = "legacy_query_only_targeted_contract_not_tested"
+    return projected
+
+
 @contextmanager
 def _runtime_barriers(conn: ReadOnlyAuditConnection) -> Iterator[None]:
-    def execute_legacy_local_search(*, recall_kwargs, recall, **_kwargs):
-        """Harness-only compatibility lane; never changes production defaults."""
+    planner = vkpi_kol_pool_search.kol_smart_query_planner
+    original_planner = planner.plan_text_query_provider_free
 
-        return recall(**recall_kwargs)
+    def plan_legacy_local_search(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _legacy_compatibility_plan(original_planner(*args, **kwargs))
 
     patches = [
         (profile_recall, "get_conn", lambda: conn),
@@ -376,7 +401,7 @@ def _runtime_barriers(conn: ReadOnlyAuditConnection) -> Iterator[None]:
         (llm_gateway, "invoke", _tripwire("llm_gateway")),
         (search_sessions, "create_session", _tripwire("session_create")),
         (search_sessions, "attach_recall_result", _tripwire("session_attach")),
-        (targeted_search_runtime, "execute_local_search", execute_legacy_local_search),
+        (planner, "plan_text_query_provider_free", plan_legacy_local_search),
     ]
     previous = [(module, name, getattr(module, name)) for module, name, _value in patches]
     old_rerank = os.environ.get("RECALL_LLM_RERANK_ENABLED")
@@ -619,6 +644,8 @@ def run_benchmark(*, admin_dsn: str, golden_path: Path, rounds: int) -> dict[str
             "smart_search_route_entry_executed": True,
             "legacy_smart_local_compatibility_executed": True,
             "prospective_targeted_query_cells_tested": False,
+            "query_plan_semantics_tested": False,
+            "targeted_plan_fields_projected_out_for_legacy_benchmark": True,
             "provider_free": True,
             "isolated_loopback_fixture_database": True,
             "measured_transaction_read_only": bool(read_only["transaction_read_only"]),
@@ -659,6 +686,7 @@ def run_benchmark(*, admin_dsn: str, golden_path: Path, rounds: int) -> dict[str
             "create_session=false; session persistence/attach behavior was not tested.",
             "Deep analysis, contact enrichment, online discovery and provider execution were not tested.",
             "Counts and timings validate only legacy provider-free Smart-local compatibility.",
+            "Harness projects out targeted plan fields; it does not certify planner semantics or repair invalid QueryCells.",
             "Prospective QueryCell precision, per-cell quotas and honest shortfalls are tested separately.",
         ],
     }
