@@ -4,7 +4,7 @@ set -euo pipefail
 SSH_TARGET="${SSH_TARGET:-viltrox}"
 SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
 LOG_DATE="${LOG_DATE:-$(date -u +%Y%m%d)}"
-LOG_PATH="${LOG_PATH:-/var/log/vkpi/sync_daily_${LOG_DATE}.log}"
+LOG_PATH="${LOG_PATH:-/var/log/vkpi-sync-daily/sync_daily_${LOG_DATE}.log}"
 
 ssh "${SSH_TARGET}" "SYNC_SERVICE='${SYNC_SERVICE}' LOG_PATH='${LOG_PATH}' PYTHONDONTWRITEBYTECODE=1 python3 -B -" <<'PY'
 from __future__ import annotations
@@ -147,7 +147,7 @@ def latest_finished_receipt(lines: list[str]) -> dict:
 
 
 service = os.environ.get("SYNC_SERVICE") or "vkpi-sync-daily.service"
-log_path = Path(os.environ.get("LOG_PATH") or "/var/log/vkpi/sync_daily.log")
+log_path = Path(os.environ.get("LOG_PATH") or "/var/log/vkpi-sync-daily/sync_daily.log")
 lines = tail_lines(log_path)
 marker_patterns = (
     "cron_daily_sync_",

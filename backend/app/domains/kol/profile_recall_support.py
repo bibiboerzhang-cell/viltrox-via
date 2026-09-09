@@ -76,7 +76,7 @@ def openai_client(
         try:
             import httpx
 
-            return OpenAI(api_key=api_key, http_client=httpx.Client(trust_env=False, timeout=timeout))
+            return OpenAI(api_key=api_key, max_retries=0, http_client=httpx.Client(trust_env=False, timeout=timeout))
         except Exception as exc:
             raise RuntimeError(f"openai_direct_client_unavailable: {exc}") from exc
     proxy = (proxy_override or os.getenv("OPENAI_PROXY") or os.getenv("YTDLP_PROXY") or "").strip()
@@ -84,10 +84,10 @@ def openai_client(
         try:
             import httpx
 
-            return OpenAI(api_key=api_key, http_client=httpx.Client(proxy=proxy, timeout=timeout))
+            return OpenAI(api_key=api_key, max_retries=0, http_client=httpx.Client(proxy=proxy, timeout=timeout))
         except Exception:
             logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, max_retries=0)
 
 
 def assert_collection_dim(

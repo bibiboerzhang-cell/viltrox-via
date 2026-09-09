@@ -142,7 +142,7 @@ def extract_contract_pdf(pdf_path: str, *, context: dict[str, Any] | None = None
         raise RuntimeError("contract PDF missing")
     pdf_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
     prompt = _contract_prompt(context)
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, max_retries=0)
     started = time.monotonic()
     response = llm_production.generate_anthropic_messages(
         client=client,

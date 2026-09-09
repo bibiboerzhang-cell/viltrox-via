@@ -19,6 +19,7 @@ import time
 from typing import Any, Callable
 
 import httpx
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed
 
 from app.platform.llm_gateway_common import (
     PROVIDER_CONFIG,
@@ -206,10 +207,12 @@ def _close_http_client() -> None:
 
 
 def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> dict[str, Any]:
+    assert_llm_provider_io_allowed()
     bounded_http_timeout(timeout)
     request_options = consume_request_options()
     client = _get_http_client()
     content = json.dumps(payload).encode("utf-8")
+    assert_llm_provider_io_allowed()
     response = client.post(
         url,
         content=content,
@@ -344,6 +347,8 @@ def _google_thinking_config(model_key: str) -> dict[str, Any] | None:
 def _provider_failure(provider: str, exc: Exception, *, started: float) -> dict[str, Any]:
     """Map failures without exposing response bodies, prompts, URLs, or keys."""
 
+    if isinstance(exc, LlmReleaseFenced):
+        raise exc
     status = "provider_exception"
     error = type(exc).__name__
     if isinstance(exc, GatewayDeadlineExceeded):

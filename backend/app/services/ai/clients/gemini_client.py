@@ -20,6 +20,7 @@ import time
 from typing import Any, Callable
 
 from app.core.logging import get_logger
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed
 
 
 logger = get_logger(__name__)
@@ -160,9 +161,19 @@ class _RetryingModels:
         info: dict[str, Any] = {"attempts": 0, "retries": 0, "errors": [], "backoff_ms": 0}
         model = str(kwargs.get("model") or "")
         while True:
+            try:
+                assert_llm_provider_io_allowed()
+            except LlmReleaseFenced:
+                _remember(info)
+                raise LlmReleaseFenced(provider_attempted=info["attempts"] > 0) from None
             info["attempts"] += 1
             try:
                 response = self._inner.generate_content(*args, **kwargs)
+            except LlmReleaseFenced as exc:
+                _remember(info)
+                raise LlmReleaseFenced(
+                    provider_attempted=info["attempts"] > 1 or exc.provider_attempted,
+                ) from None
             except Exception as exc:
                 retry_index = info["retries"]
                 if retry_index >= len(self._delays) or not is_transient_gemini_error(exc):

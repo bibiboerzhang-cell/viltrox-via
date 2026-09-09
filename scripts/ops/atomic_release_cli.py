@@ -22,7 +22,7 @@ def build_parser(actions: Mapping[str, Action]) -> argparse.ArgumentParser:
         "inspect_unit_state",
         "restore",
     }
-    if set(actions) != required:
+    if set(actions) - {"inspect_policy"} != required:
         missing = sorted(required.difference(actions))
         unexpected = sorted(set(actions).difference(required))
         raise ValueError(
@@ -44,6 +44,8 @@ def build_parser(actions: Mapping[str, Action]) -> argparse.ArgumentParser:
     seal_parser.add_argument("--target-database", default="")
     seal_parser.add_argument("--env-fingerprint-before", default="")
     seal_parser.add_argument("--database-owner-release-id", default="")
+    seal_parser.add_argument("--release-policy", choices=("rollback-compatible", "forward-only-307-310-v1"), default="rollback-compatible")
+    seal_parser.add_argument("--forward-only-evidence-file", default="")
     seal_parser.add_argument("--owner-uid", type=int)
     seal_parser.add_argument("--owner-gid", type=int)
     seal_parser.set_defaults(action=actions["seal"])
@@ -52,6 +54,10 @@ def build_parser(actions: Mapping[str, Action]) -> argparse.ArgumentParser:
     verify_seal_parser.add_argument("--expected-owner-uid", type=int)
     verify_seal_parser.add_argument("--expected-owner-gid", type=int)
     verify_seal_parser.set_defaults(action=actions["verify_seal"])
+
+    if "inspect_policy" in actions:
+        policy_parser = subparsers.add_parser("inspect-policy", parents=[common])
+        policy_parser.set_defaults(action=actions["inspect_policy"])
 
     layout_parser = subparsers.add_parser("worker-layout-preflight", parents=[common])
     layout_parser.add_argument("--app-user", required=True)
@@ -81,6 +87,8 @@ def build_parser(actions: Mapping[str, Action]) -> argparse.ArgumentParser:
     prepare_parser.add_argument("--target-database", default="")
     prepare_parser.add_argument("--env-fingerprint-before", default="")
     prepare_parser.add_argument("--database-owner-release-id", default="")
+    prepare_parser.add_argument("--release-policy", choices=("rollback-compatible", "forward-only-307-310-v1"), default="rollback-compatible")
+    prepare_parser.add_argument("--forward-only-evidence-file", default="")
     prepare_parser.add_argument("--rollback-anchor-release-id", default="")
     prepare_parser.set_defaults(action=actions["prepare"])
 

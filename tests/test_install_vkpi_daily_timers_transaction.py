@@ -128,7 +128,12 @@ def test_dispatch_keeps_local_only_mode_out_and_all_remote_modes_in_locking_path
 def test_log_permission_migration_is_bounded_and_rollbackable() -> None:
     script = _installer()
 
-    assert "install -d -o viltrox -g viltrox -m 0750 /var/log/vkpi" in script
+    assert 'install -d -o viltrox -g viltrox -m 0750 "${log_dir}"' in script
+    remote = script.split("<<'REMOTE_TRANSACTION'", 1)[1].split("REMOTE_TRANSACTION", 1)[0]
+    assert 'log_dir="/var/log/vkpi"' not in remote
+    assert " /var/log/vkpi\n" not in remote
+    assert 'log_dir="/var/log/vkpi-sync-daily"' in remote.split("  primary)", 1)[1].split("    ;;", 1)[0]
+    assert 'log_dir="/var/log/vkpi-qualified-kol-refresh"' in remote.split("  qualified)", 1)[1].split("    ;;", 1)[0]
     assert "^sync_daily_[0-9]{8}\\.log$" in script
     assert (
         'find -P "${log_dir}" -mindepth 1 -maxdepth 1 -print0 '
@@ -217,8 +222,9 @@ def test_untrusted_environment_overrides_fail_before_remote_access(
     assert expected in result.stderr
 
 
-def test_primary_staging_passes_real_local_paths_to_scp(
-    tmp_path: Path,
+@pytest.mark.parametrize("mode", ["remote", "remote-qualified-kol"])
+def test_staging_passes_real_local_paths_and_owned_log_contract_to_scp(
+    tmp_path: Path, mode: str,
 ) -> None:
     fake_bin = tmp_path / "bin"
     captured = tmp_path / "captured"
@@ -258,7 +264,7 @@ done
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
     env["CAPTURE_DIR"] = str(captured)
     result = subprocess.run(
-        ["bash", str(INSTALLER), "remote"],
+        ["bash", str(INSTALLER), mode],
         cwd=ROOT,
         env=env,
         text=True,
@@ -267,11 +273,24 @@ done
     )
 
     assert result.returncode == 0, result.stderr
-    assert {path.name for path in captured.iterdir()} == {
+    expected = {
         "vkpi-sync-daily.service",
         "vkpi-sync-daily.timer",
         "vkpi-sync-daily-alert@.service",
         "vkpi-sync-deadman.service",
         "vkpi-sync-deadman.timer",
+    } if mode == "remote" else {
+        "vkpi-qualified-kol-refresh.service", "vkpi-qualified-kol-refresh.timer",
     }
+    assert {path.name for path in captured.iterdir()} == expected
     assert all(path.stat().st_size > 0 for path in captured.iterdir())
+    service = "vkpi-sync-daily" if mode == "remote" else "vkpi-qualified-kol-refresh"
+    generated = (captured / f"{service}.service").read_text(encoding="utf-8")
+    assert f"LogsDirectory={service}\n" in generated
+    assert "LogsDirectoryMode=0750\n" in generated
+    assert f">> /var/log/{service}/" in generated
+    assert ">> /var/log/vkpi/" not in generated
+    assert "User=viltrox\n" in generated and "UMask=0077\n" in generated
+    assert "chown" not in generated and "mkdir" not in generated
+    if mode == "remote":
+        assert generated == DAILY_UNIT.read_text(encoding="utf-8")

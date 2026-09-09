@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from app.platform.llm_release_fence import assert_llm_provider_io_allowed
+
 
 def embed_openai_sync(
     texts: list[str],
@@ -16,6 +18,7 @@ def embed_openai_sync(
     if not openai_available or not openai_client:
         return []
     batch = list(texts)[:max_batch]
+    assert_llm_provider_io_allowed()
     response = openai_client.embeddings.create(model=model, input=batch)
     return [[float(value) for value in item.embedding] for item in (response.data or [])]
 

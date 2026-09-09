@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Iterable
+from app.platform.llm_release_fence import assert_llm_provider_io_allowed
 
 from app.platform import llm_gateway_invoke_attempts as _invoke_attempts
 from app.platform import llm_gateway_invoke_limits as _limits
@@ -248,6 +249,7 @@ def invoke_impl(
     namespace: dict[str, Any],
     hooks: InvocationHooks,
 ) -> dict[str, Any]:
+    assert_llm_provider_io_allowed()
     deps = _resolve_dependencies(namespace)
     bounded_tokens = max(16, int(max_output_tokens or 0))
     safe_prompt = str(prompt or "")

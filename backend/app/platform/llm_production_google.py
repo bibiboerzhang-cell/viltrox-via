@@ -14,6 +14,8 @@ import time
 from typing import Any
 
 from app.platform import llm_gateway
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed, finish_fenced_sdk_attempt
+from app.platform.llm_sdk_retry_policy import google_single_attempt_config
 from app.platform.llm_production_common import (
     sdk_failure as _sdk_failure,
 )
@@ -182,6 +184,8 @@ def _reserve_google_budget(
                     extra={"reservation_key": reservation_key},
                     exc_info=True,
                 )
+        if isinstance(exc, LlmReleaseFenced):
+            raise
         reason = str(getattr(exc, "reason", "") or type(exc).__name__)
         llm_gateway.record_call(
             provider=provider,
@@ -255,6 +259,8 @@ def _start_google_reservation(
             )
         except Exception:
             released = False
+        if isinstance(exc, LlmReleaseFenced):
+            raise
         if not released:
             llm_gateway._mark_reserved_attempt_unknown(reservation_key)
         _append_google_attempt(
@@ -294,11 +300,14 @@ def _call_google_provider(
 
     started = time.monotonic()
     try:
+        assert_llm_provider_io_allowed()
         response = client.models.generate_content(
             model=exact_model,
             contents=contents,
             config=provider_config,
         )
+    except LlmReleaseFenced as exc:
+        finish_fenced_sdk_attempt(llm_gateway, reservation_key, breaker_session, exc)
     except Exception as provider_exc:
         breaker_completion_error: Exception | None = None
         try:
@@ -511,6 +520,7 @@ def generate_google_content(
     allowance.  A failure before provider I/O releases the reservation.
     """
 
+    assert_llm_provider_io_allowed()
     provider = "google"
     exact_model = str(model or "").strip()
     exact_purpose = str(purpose or "").strip()
@@ -522,6 +532,7 @@ def generate_google_content(
     provider_config = _google_config_with_output_limit(
         config, output_limit, model=exact_model
     )
+    provider_config = google_single_attempt_config(provider_config)
     progress_metadata = _google_progress_metadata(
         exact_purpose, metadata, execution_class
     )

@@ -25,6 +25,7 @@ import secrets
 from typing import Optional
 
 from app.core.logging import get_logger
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed
 
 logger = get_logger(__name__)
 
@@ -34,7 +35,7 @@ try:
     _openai_client: Optional[OpenAI] = None
     _OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
     if _OPENAI_KEY:
-        _openai_client = OpenAI(api_key=_OPENAI_KEY)
+        _openai_client = OpenAI(api_key=_OPENAI_KEY, max_retries=0)
         logger.info("verify_comment_generator.client_ready")
     else:
         logger.warning("verify_comment_generator.key_missing")
@@ -98,6 +99,7 @@ def generate_praise_comment(code: Optional[str] = None) -> tuple[str, str]:
         comment_text 例如: "Viltrox keeps raising the bar! 📸✨ VLX-F5EF0380"
         code 例如: "VLX-F5EF0380"
     """
+    assert_llm_provider_io_allowed()
     if not code:
         code = generate_verification_code()
     
@@ -107,6 +109,8 @@ def generate_praise_comment(code: Optional[str] = None) -> tuple[str, str]:
             comment = _generate_with_gpt(code)
             if comment and code in comment:
                 return comment, code
+        except LlmReleaseFenced:
+            raise
         except Exception as e:
             logger.warning("verify_comment_generator.gpt_failed", extra={"error": str(e)})
     
@@ -128,7 +132,7 @@ def generate_template_comment(code: Optional[str] = None) -> tuple[str, str]:
 def _generate_with_gpt(code: str) -> str:
     """调用 GPT-4o-mini 生成好评"""
     prompt = GPT_PROMPT_TEMPLATE.format(code=code)
-    
+    assert_llm_provider_io_allowed()
     response = _openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],

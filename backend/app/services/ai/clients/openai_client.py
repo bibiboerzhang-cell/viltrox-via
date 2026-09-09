@@ -20,11 +20,11 @@ try:
             try:
                 import httpx as _httpx
 
-                openai_client = OpenAI(api_key=_openai_key, http_client=_httpx.Client(proxy=_oai_proxy, timeout=60.0))
+                openai_client = OpenAI(api_key=_openai_key, max_retries=0, http_client=_httpx.Client(proxy=_oai_proxy, timeout=60.0))
             except Exception:
-                openai_client = OpenAI(api_key=_openai_key)
+                openai_client = OpenAI(api_key=_openai_key, max_retries=0)
         else:
-            openai_client = OpenAI(api_key=_openai_key)
+            openai_client = OpenAI(api_key=_openai_key, max_retries=0)
         OPENAI_AVAILABLE = True
         logger.info("ai.openai.ready")
     else:

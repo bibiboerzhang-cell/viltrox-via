@@ -11,6 +11,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.costs.budget_guard import check_budget, record_cost
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed
 from app.domains.kol.discovery_filters import (
     LOW_REACH_FLAG_LIKE_PATTERN,
     _reach_display_state,
@@ -164,11 +165,17 @@ def _create_embedding_with_failover(query_text: str, *, client_factory: Any = No
     ))
     plan = _embed_transport_plan()
     last_exc: Exception | None = None
+    provider_attempted = False
     for i, spec in enumerate(plan):
         try:
+            assert_llm_provider_io_allowed()
             client = factory(spec)
+            assert_llm_provider_io_allowed()
+            provider_attempted = True
             resp = client.embeddings.create(model=EMBEDDING_MODEL, input=[query_text])
             return resp, str(spec["transport"])
+        except LlmReleaseFenced as exc:
+            raise LlmReleaseFenced(provider_attempted=provider_attempted or exc.provider_attempted) from None
         except Exception as exc:  # noqa: BLE001 — failover 判据集中在 _should_failover
             if i + 1 >= len(plan) or not _should_failover(exc):
                 raise
@@ -182,6 +189,7 @@ def _create_embedding_with_failover(query_text: str, *, client_factory: Any = No
 
 def _embed_query(query_text: str) -> tuple[list[float], dict[str, Any]]:
     # 护栏③ enforce(诊断 C-3③):embedding 调用前硬闸 + 调用后记账(此前裸奔零护栏零记账)。
+    assert_llm_provider_io_allowed()
     if not check_budget("provider:openai", 0.0, require_configured=True):
         raise RuntimeError("embedding_budget_exceeded")
     resp, transport = _create_embedding_with_failover(query_text)

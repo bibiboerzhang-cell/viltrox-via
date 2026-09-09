@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from app.platform import llm_gateway
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed, finish_fenced_sdk_attempt
 from app.platform.llm_production_common import (
     assert_chain_bound_binding as _assert_chain_bound_binding,
     progress_metadata as _progress_metadata,
@@ -52,6 +53,7 @@ def generate_anthropic_messages(
     callers retain their existing retry and JSON parsing semantics.
     """
 
+    assert_llm_provider_io_allowed()
     provider = "anthropic"
     exact_model = str(model or "").strip()
     exact_purpose = str(purpose or "").strip()
@@ -178,6 +180,8 @@ def generate_anthropic_messages(
                     },
                     exc_info=True,
                 )
+        if isinstance(exc, LlmReleaseFenced):
+            raise
         reason = str(getattr(exc, "reason", "") or type(exc).__name__)
         llm_gateway.record_call(
             provider=provider,
@@ -206,9 +210,11 @@ def generate_anthropic_messages(
 
     started = time.monotonic()
     try:
-        response = _anthropic_checked_response(client.messages.create(
-            **_anthropic_create_kwargs(exact_model, max_output_tokens, messages)
-        ))
+        request_kwargs = _anthropic_create_kwargs(exact_model, max_output_tokens, messages)
+        assert_llm_provider_io_allowed()
+        response = _anthropic_checked_response(client.messages.create(**request_kwargs))
+    except LlmReleaseFenced as exc:
+        finish_fenced_sdk_attempt(llm_gateway, reservation_key, breaker_session, exc)
     except Exception as provider_exc:
         breaker_completion_error: Exception | None = None
         try:

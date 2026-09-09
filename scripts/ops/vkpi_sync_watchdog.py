@@ -30,7 +30,7 @@ def _write(payload: dict[str, Any]) -> None:
 
 
 def _today_log() -> str:
-    return f"/var/log/vkpi/sync_daily_{datetime.now(timezone.utc).strftime('%Y%m%d')}.log"
+    return f"/var/log/vkpi-sync-daily/sync_daily_{datetime.now(timezone.utc).strftime('%Y%m%d')}.log"
 
 
 def _parse_json_blob(output: str) -> dict[str, Any]:

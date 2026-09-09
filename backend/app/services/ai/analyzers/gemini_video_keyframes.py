@@ -426,7 +426,7 @@ async def analyze_v2_judgment_with_anthropic_keyframes(
         performance_context=performance_context,
     )
     content = build_anthropic_multimodal_content(f"视频标题: {title}\n\n{prompt}", keyframes)
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, max_retries=0)
     messages = [{"role": "user", "content": content}]
     try:
         # 思考策略由边界按 env 统一(默认 disabled,成本中性);max_tokens 4000 全给正文。无 temperature。

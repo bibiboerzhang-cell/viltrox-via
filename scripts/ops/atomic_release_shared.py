@@ -11,8 +11,10 @@ from pathlib import Path
 
 if __package__:
     from .atomic_release_units import LayoutError
+    from .release_forward_policy import forward_only_metadata
 else:
     from atomic_release_units import LayoutError
+    from release_forward_policy import forward_only_metadata
 
 
 RELEASE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -687,7 +689,19 @@ def _database_release_metadata(
     pending_migrations: str,
     compatibility_declaration: str,
     database_owner_release_id: str = "",
+    release_policy: str = "rollback-compatible",
+    forward_only_evidence: object = None,
+    migrations_dir: Path | None = None,
 ) -> dict[str, object]:
+    if release_policy != "rollback-compatible":
+        return forward_only_metadata(
+            release_policy=release_policy, strategy=strategy, source_database=source_database,
+            target_database=target_database, env_fingerprint_before=env_fingerprint_before,
+            database_owner_release_id=database_owner_release_id, pending_migrations=pending_migrations,
+            compatibility_declaration=compatibility_declaration, evidence=forward_only_evidence,
+            migrations_dir=migrations_dir or Path(__file__).resolve().parents[2] / "migrations")
+    if forward_only_evidence is not None:
+        raise LayoutError("default release cannot supply forward-only evidence")
     if strategy == "in-place":
         if (
             source_database

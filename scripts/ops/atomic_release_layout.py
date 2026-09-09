@@ -20,6 +20,8 @@ from pathlib import Path
 
 if __package__:
     from .atomic_release_cli import build_parser as _build_parser
+    from .atomic_release_manifest import policy_arguments, read_restore_policy, validate_prepare_policy, write_manifest as _manifest
+    from .release_forward_policy import assert_activation_allowed, assert_restore_allowed, validate_sealed_policy
     from .atomic_release_integrity import (
         RELEASE_MANIFEST_NAME,
         make_release_immutable as _make_release_immutable,
@@ -84,6 +86,8 @@ if __package__:
     )
 else:
     from atomic_release_cli import build_parser as _build_parser
+    from atomic_release_manifest import policy_arguments, read_restore_policy, validate_prepare_policy, write_manifest as _manifest
+    from release_forward_policy import assert_activation_allowed, assert_restore_allowed, validate_sealed_policy
     from atomic_release_integrity import (
         RELEASE_MANIFEST_NAME,
         make_release_immutable as _make_release_immutable,
@@ -274,67 +278,6 @@ def _shared_links(root: Path, release: Path) -> None:
         destination.symlink_to(os.path.relpath(source, release), target_is_directory=source.is_dir())
 
 
-def _manifest(
-    root: Path,
-    release: Path,
-    *,
-    release_id: str,
-    git_sha: str,
-    pending_migrations: str,
-    compatibility_declaration: str,
-    database_strategy: str = "in-place",
-    source_database: str = "",
-    target_database: str = "",
-    env_fingerprint_before: str = "",
-    database_owner_release_id: str = "",
-    immutable_owner_uid: int,
-    immutable_owner_gid: int,
-) -> None:
-    database_metadata = _database_release_metadata(
-        strategy=database_strategy,
-        source_database=source_database,
-        target_database=target_database,
-        env_fingerprint_before=env_fingerprint_before,
-        pending_migrations=pending_migrations,
-        compatibility_declaration=compatibility_declaration,
-        database_owner_release_id=database_owner_release_id,
-    )
-    payload_sha256, payload_entry_count = _payload_fingerprint(
-        root,
-        release,
-        shared_aliases=RELEASE_SHARED_ALIASES,
-    )
-    payload = {
-        "schema": 2,
-        "release_id": release_id,
-        "git_sha": git_sha,
-        "payload_sha256": payload_sha256,
-        "payload_entry_count": payload_entry_count,
-        "immutable_owner_uid": immutable_owner_uid,
-        "immutable_owner_gid": immutable_owner_gid,
-        "pending_migrations": [value for value in pending_migrations.split(",") if value],
-        "forward_compatible_migrations": [
-            value for value in compatibility_declaration.split(",") if value
-        ],
-        **database_metadata,
-    }
-    manifest_path = release / RELEASE_MANIFEST_NAME
-    if manifest_path.exists() or manifest_path.is_symlink():
-        raise LayoutError("refusing to reseal an existing release manifest")
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=".vkpi-release.", suffix=".tmp", dir=release
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, manifest_path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def seal(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
     release_id = _id(args.release_id)
@@ -346,6 +289,7 @@ def seal(args: argparse.Namespace) -> None:
     build_sha = (release / "BUILD_GIT_SHA").read_text(encoding="utf-8").strip()
     if build_sha != args.git_sha:
         raise LayoutError("BUILD_GIT_SHA does not match the sealed release")
+    policy = policy_arguments(args, git_sha=build_sha)
     _database_release_metadata(
         strategy=args.database_strategy,
         source_database=args.source_database,
@@ -354,6 +298,7 @@ def seal(args: argparse.Namespace) -> None:
         database_owner_release_id=args.database_owner_release_id,
         pending_migrations=args.pending_migrations,
         compatibility_declaration=args.compatibility_declaration,
+        migrations_dir=release / "migrations", **policy,
     )
     _shared_links(root, release)
     owner_uid = os.geteuid() if args.owner_uid is None else args.owner_uid
@@ -372,27 +317,37 @@ def seal(args: argparse.Namespace) -> None:
         database_owner_release_id=args.database_owner_release_id,
         immutable_owner_uid=owner_uid,
         immutable_owner_gid=owner_gid,
+        **policy,
     )
     _make_release_immutable(release, owner_uid=owner_uid, owner_gid=owner_gid)
-    _verify_sealed_release(
+    manifest = _verify_sealed_release(
         root,
         release,
         shared_aliases=RELEASE_SHARED_ALIASES,
         expected_owner_uid=owner_uid,
         expected_owner_gid=owner_gid,
     )
+    validate_sealed_policy(manifest, release)
 
 
 def verify_seal(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
     release = _inside_releases(root, root / "releases" / _id(args.release_id))
-    _verify_sealed_release(
+    manifest = _verify_sealed_release(
         root,
         release,
         shared_aliases=RELEASE_SHARED_ALIASES,
         expected_owner_uid=args.expected_owner_uid,
         expected_owner_gid=args.expected_owner_gid,
     )
+    validate_sealed_policy(manifest, release)
+
+
+def inspect_policy(args: argparse.Namespace) -> None:
+    root = Path(args.root).resolve()
+    release = _inside_releases(root, root / "releases" / _id(args.release_id))
+    manifest = _verify_sealed_release(root, release, shared_aliases=RELEASE_SHARED_ALIASES)
+    sys.stdout.write(json.dumps(validate_sealed_policy(manifest, release), sort_keys=True) + "\n")
 
 
 def _release_build_sha(release: Path, *, label: str) -> str:
@@ -518,7 +473,8 @@ def prepare(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
     release_id = _id(args.release_id)
     new_release = _inside_releases(root, root / "releases" / release_id)
-    _verify_sealed_release(root, new_release, shared_aliases=RELEASE_SHARED_ALIASES)
+    manifest = _verify_sealed_release(root, new_release, shared_aliases=RELEASE_SHARED_ALIASES)
+    policy = policy_arguments(args, git_sha=manifest["git_sha"])
     original_previous = _existing_link_target(root, "previous")
     observed_current = _existing_link_target(root, "current")
     activation_anchor = _rollback_activation_anchor(
@@ -566,7 +522,9 @@ def prepare(args: argparse.Namespace) -> None:
         database_owner_release_id=args.database_owner_release_id,
         pending_migrations=args.pending_migrations,
         compatibility_declaration=args.compatibility_declaration,
+        migrations_dir=new_release / "migrations", **policy,
     )
+    validate_prepare_policy(manifest, database_metadata, observed_current or root)
 
     rollbacks_root = _controller_rollbacks_root(root, create=True)
     rollback_candidate = rollbacks_root / release_id
@@ -643,7 +601,8 @@ def prepare(args: argparse.Namespace) -> None:
 def activate(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
     release = _inside_releases(root, root / "releases" / _id(args.release_id))
-    _verify_sealed_release(root, release, shared_aliases=RELEASE_SHARED_ALIASES)
+    manifest = _verify_sealed_release(root, release, shared_aliases=RELEASE_SHARED_ALIASES)
+    assert_activation_allowed(manifest)
     if _existing_link_target(root, "previous") is None:
         raise LayoutError("previous release pointer is required before activation")
     _atomic_link(root, "current", release)
@@ -669,6 +628,10 @@ def restore(args: argparse.Namespace) -> None:
     rollback_dir, metadata = _load_rollback_metadata(root, release_id)
     if metadata.get("release_id") != release_id:
         raise LayoutError("rollback metadata release id mismatch")
+    assert_restore_allowed(metadata)
+    guarded_releases = {root / "releases" / release_id, _existing_link_target(root, "current")}
+    for guarded in guarded_releases - {None}:
+        assert_restore_allowed(read_restore_policy(guarded))
     schema = metadata.get("schema")
     if schema == 2:
         raise LayoutError(
@@ -814,6 +777,7 @@ def parser() -> argparse.ArgumentParser:
             "rollback_unit_state": rollback_unit_state,
             "inspect_unit_state": inspect_unit_state,
             "restore": restore,
+            "inspect_policy": inspect_policy,
         }
     )
 

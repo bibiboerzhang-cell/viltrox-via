@@ -161,7 +161,7 @@ def extract_invoice_file(file_path: str, *, model_name: str = DEFAULT_CONTRACT_M
     path = Path(file_path)
     if not path.exists() or path.stat().st_size <= 0:
         raise RuntimeError("invoice file missing")
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, max_retries=0)
     started = time.monotonic()
     response = llm_production.generate_anthropic_messages(
         client=client,

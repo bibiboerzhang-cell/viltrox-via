@@ -21,6 +21,7 @@ import time
 from typing import Any
 
 from app.platform import llm_gateway
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed, finish_fenced_sdk_attempt
 from app.platform.llm_gateway_providers import _openai_reasoning_effort
 from app.platform.llm_production_common import (
     assert_chain_bound_binding as _assert_chain_bound_binding,
@@ -139,6 +140,7 @@ def generate_openai_responses(
     and parsing semantics.  A task binding is mandatory (no inferred purpose).
     """
 
+    assert_llm_provider_io_allowed()
     provider = "openai"
     exact_model = str(model or "").strip()
     exact_purpose = str(purpose or "").strip()
@@ -257,6 +259,8 @@ def generate_openai_responses(
                     extra={"reservation_key": reservation_key},
                     exc_info=True,
                 )
+        if isinstance(exc, LlmReleaseFenced):
+            raise
         reason = str(getattr(exc, "reason", "") or type(exc).__name__)
         _record(
             provider=provider,
@@ -280,9 +284,11 @@ def generate_openai_responses(
 
     started = time.monotonic()
     try:
-        response = client.responses.create(
-            **openai_responses_create_kwargs(exact_model, output_limit, input_items)
-        )
+        request_kwargs = openai_responses_create_kwargs(exact_model, output_limit, input_items)
+        assert_llm_provider_io_allowed()
+        response = client.responses.create(**request_kwargs)
+    except LlmReleaseFenced as exc:
+        finish_fenced_sdk_attempt(llm_gateway, reservation_key, breaker_session, exc)
     except Exception as provider_exc:
         breaker_completion_error: Exception | None = None
         try:

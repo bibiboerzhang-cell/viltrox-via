@@ -9,6 +9,7 @@ from typing import Any
 
 from app.platform.llm_gateway_invoke_types import CandidateAttempt, InvocationContext
 from app.platform import llm_gateway_invoke_limits as _limits
+from app.platform.llm_release_fence import LlmReleaseFenced
 
 
 def _reserved_hard_stop(
@@ -332,6 +333,11 @@ def _open_candidate(ctx: InvocationContext, attempt: CandidateAttempt) -> bool:
                 attempt.reservation_key
             )
             attempt.provider_marked_started = True
+    except LlmReleaseFenced as exc:
+        _cleanup_open_failure(ctx, attempt)
+        ctx.stop_reason = exc.reason
+        ctx.errors.append({"provider": "gateway", "status": exc.reason})
+        return False
     except Exception as exc:  # noqa: BLE001 - fail closed before provider I/O
         _cleanup_open_failure(ctx, attempt)
         _record_open_failure(ctx, attempt, exc)

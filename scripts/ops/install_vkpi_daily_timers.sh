@@ -132,7 +132,7 @@ remote_root="$2"
 mode="$3"
 enable_qualified="$4"
 systemd_dir="/etc/systemd/system"
-log_dir="/var/log/vkpi"
+log_dir=""
 
 fail() {
   printf 'vkpi systemd transaction: %s\n' "$*" >&2
@@ -192,6 +192,7 @@ exec 8>/run/lock/vkpi-systemd-install.lock
 
 case "${mode}" in
   primary)
+    log_dir="/var/log/vkpi-sync-daily"
     units=(
       vkpi-sync-daily.service
       vkpi-sync-daily.timer
@@ -213,6 +214,7 @@ case "${mode}" in
     )
     ;;
   qualified)
+    log_dir="/var/log/vkpi-qualified-kol-refresh"
     units=(vkpi-qualified-kol-refresh.service vkpi-qualified-kol-refresh.timer)
     timers=(vkpi-qualified-kol-refresh.timer)
     policy_disable_timers=()
@@ -590,7 +592,7 @@ done
 if [[ "${log_dir_existed}" = "1" ]]; then
   freeze_log_directory
 else
-  install -d -o root -g root -m 0700 /var/log/vkpi
+  install -d -o root -g root -m 0700 "${log_dir}"
 fi
 
 log_scan="${backup_dir}/log-scan.bin"
@@ -646,7 +648,7 @@ done
 
 # Hand log ownership to the non-root services only after unit installation and
 # reload succeeded. Rollback freezes the directory again before path-based work.
-install -d -o viltrox -g viltrox -m 0750 /var/log/vkpi
+install -d -o viltrox -g viltrox -m 0750 "${log_dir}"
 
 # Enablement is validated while timers remain stopped. Activation is the last
 # fallible transactional operation and uses --no-block so Persistent catch-up
@@ -738,13 +740,17 @@ Type=oneshot
 User=viltrox
 Group=viltrox
 UMask=0077
+# systemd creates a service-owned directory before opening the daily log.
+# Do not depend on the root-owned legacy /var/log/vkpi directory.
+LogsDirectory=vkpi-sync-daily
+LogsDirectoryMode=0750
 # Exit 75 raises OnFailure but is not auto-restarted; the next timer is the retry boundary.
 RestartPreventExitStatus=75 76
 WorkingDirectory=${REMOTE_ROOT}/current
 EnvironmentFile=${REMOTE_ROOT}/.env
 Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/bin/bash -lc '/usr/bin/env VKPI_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=${REMOTE_ROOT}/current/backend ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol --include-qualified-kol --kol-tiers hot --kol-stale-days 1 --kol-max-posts 2 --kol-limit 90 --worker-count 2 --child-timeout-seconds 300 >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
+ExecStart=/bin/bash -lc '/usr/bin/env VKPI_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=${REMOTE_ROOT}/current/backend ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol --include-qualified-kol --kol-tiers hot --kol-stale-days 1 --kol-max-posts 2 --kol-limit 90 --worker-count 2 --child-timeout-seconds 300 >> /var/log/vkpi-sync-daily/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
 # Legacy KOL Pool refresh is intentionally excluded until P1.X.A tier selection replaces full-pool daily refresh.
 # TODO: Consider lowering to 2h after official-only runtime is observed for one week.
 TimeoutStartSec=6h
@@ -870,11 +876,13 @@ User=viltrox
 Group=viltrox
 UMask=0077
 RestartPreventExitStatus=75 76
+LogsDirectory=vkpi-qualified-kol-refresh
+LogsDirectoryMode=0750
 WorkingDirectory=${REMOTE_ROOT}/current
 EnvironmentFile=${REMOTE_ROOT}/.env
 Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/bin/bash -lc 'if systemctl is-active --quiet vkpi-sync-daily.service; then printf '\''{"event":"qualified_kol_refresh_skipped","reason":"vkpi-sync-daily.service active","at":"%s"}\n'\'' "\$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> /var/log/vkpi/qualified_kol_refresh_skip.log; exit 0; fi; /usr/bin/env VKPI_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=${REMOTE_ROOT}/current/backend ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --skip-official --include-qualified-kol --kol-tiers hot --kol-stale-days ${QUALIFIED_KOL_STALE_DAYS} --kol-limit ${QUALIFIED_KOL_LIMIT} --kol-max-posts 1 --kol-error-stop-threshold 3 >> /var/log/vkpi/qualified_kol_refresh_\$(date -u +%%Y%%m%%d).log 2>&1'
+ExecStart=/bin/bash -lc 'if systemctl is-active --quiet vkpi-sync-daily.service; then printf '\''{"event":"qualified_kol_refresh_skipped","reason":"vkpi-sync-daily.service active","at":"%s"}\n'\'' "\$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> /var/log/vkpi-qualified-kol-refresh/qualified_kol_refresh_skip.log; exit 0; fi; /usr/bin/env VKPI_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=${REMOTE_ROOT}/current/backend ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --skip-official --include-qualified-kol --kol-tiers hot --kol-stale-days ${QUALIFIED_KOL_STALE_DAYS} --kol-limit ${QUALIFIED_KOL_LIMIT} --kol-max-posts 1 --kol-error-stop-threshold 3 >> /var/log/vkpi-qualified-kol-refresh/qualified_kol_refresh_\$(date -u +%%Y%%m%%d).log 2>&1'
 # Qualified-only runs can enqueue up to 200 children. Keep the service budget
 # aligned with cron_daily_sync.py's bounded terminal observation window instead
 # of killing the observer while provider work is still legitimately running.

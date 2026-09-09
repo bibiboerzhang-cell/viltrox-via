@@ -31,7 +31,7 @@ try:
         ANTHROPIC_AVAILABLE = False
         _anthropic_client = None
     else:
-        _anthropic_client = anthropic.Anthropic(api_key=_api_key)
+        _anthropic_client = anthropic.Anthropic(api_key=_api_key, max_retries=0)
         ANTHROPIC_AVAILABLE = True
         logger.info("ai.claude.ready", extra={"configured": True})
 except ImportError:
@@ -47,5 +47,5 @@ def get_claude_client():
         return _anthropic_client
     key = os.environ.get("ANTHROPIC_API_KEY", "") or _read_env_key("ANTHROPIC_API_KEY")
     if key and anthropic:
-        return anthropic.Anthropic(api_key=key)
+        return anthropic.Anthropic(api_key=key, max_retries=0)
     return None

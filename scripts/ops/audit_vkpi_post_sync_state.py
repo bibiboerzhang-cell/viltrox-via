@@ -727,7 +727,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--baseline-file", type=Path, default=DEFAULT_BASELINE, help="Versioned acceptance baseline JSON")
     parser.add_argument(
         "--sync-log-path",
-        default=f"/var/log/vkpi/sync_daily_{datetime.now(timezone.utc).strftime('%Y%m%d')}.log",
+        default=f"/var/log/vkpi-sync-daily/sync_daily_{datetime.now(timezone.utc).strftime('%Y%m%d')}.log",
         help="Append-only JSON event log for the run being accepted",
     )
     return parser.parse_args(argv)

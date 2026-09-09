@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from typing import Any, Callable, Iterator
 
 from app.platform.llm_gateway_invoke_types import CandidateAttempt, InvocationContext
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed
 
 
 DEFAULT_PROVIDER_ATTEMPTS = 2
@@ -141,6 +142,12 @@ def execute(
     ctx: InvocationContext, attempt: CandidateAttempt, *, open_candidate: Any,
     cleanup: Any, handle_exception: Any, handle_invalid: Any, handle_mapping: Any,
 ) -> dict[str, Any] | None:
+    try:
+        assert_llm_provider_io_allowed()
+    except LlmReleaseFenced as exc:
+        ctx.stop_reason = exc.reason
+        ctx.errors.append({"provider": "gateway", "status": exc.reason})
+        return None
     if stop_before_provider(ctx) or not open_candidate(ctx, attempt):
         return None
     if deadline_hit(ctx):
@@ -149,9 +156,18 @@ def execute(
     ctx.last_reservation_key = attempt.reservation_key
     try:
         with provider_deadline(ctx.deadline_at, ctx.clock):
+            assert_llm_provider_io_allowed()
             ctx.provider_attempts += 1
             kwargs = {"model_override": attempt.binding.model_id} if attempt.explicit_model else {}
             raw = attempt.caller(ctx.safe_prompt, ctx.max_output_tokens, **kwargs)
+    except LlmReleaseFenced as exc:
+        if exc.provider_attempted:
+            ctx.deps["_mark_reserved_attempt_unknown"](attempt.reservation_key)
+        else:
+            cleanup(ctx, attempt)
+        ctx.stop_reason = exc.reason
+        ctx.errors.append({"provider": "gateway", "status": exc.reason})
+        return None
     except Exception as exc:
         result = handle_exception(ctx, attempt, exc)
         ctx.stop_reason = "provider_outcome_unknown"

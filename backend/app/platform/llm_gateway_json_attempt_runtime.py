@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from app.platform.llm_release_fence import LlmReleaseFenced, assert_llm_provider_io_allowed
 
 from . import llm_gateway_invoke_limits as _limits
 from . import llm_gateway_json_attempt_limits as _attempt_limits
@@ -369,6 +370,8 @@ def _start_provider_attempt(
             candidate.provider_marked_started = True
         _attempt_limits.checkpoint(state)
         return True
+    except LlmReleaseFenced:
+        raise
     except _limits.GatewayDeadlineExceeded:
         _release_failed_start(state, candidate)
         state.deadline_hit = True
@@ -387,6 +390,7 @@ def _call_provider(
     gateway = state.gateway
     try:
         with _limits.provider_deadline(state.deadline_at, gateway.time.monotonic):
+            assert_llm_provider_io_allowed()
             state.provider_attempts += 1
             kwargs = {"model_override": candidate.binding.model_id} if candidate.explicit_model else {}
             raw_result = candidate.caller(state.prompt, state.max_output_tokens, **kwargs)
@@ -397,6 +401,8 @@ def _call_provider(
             "provider": candidate.provider,
             "error": "provider returned a non-object result",
         }
+    except LlmReleaseFenced:
+        raise
     except _limits.GatewayDeadlineExceeded:
         return {"status": "deadline_exceeded", "provider_io_started": False}
     except Exception as exc:
@@ -677,9 +683,20 @@ def run_candidate(
     state: Any,
     candidate: JsonCandidate,
 ) -> CandidateDecision:
-    if not _start_provider_attempt(state, candidate):
-        return CONTINUE
-    result = _call_provider(state, candidate)
+    try:
+        assert_llm_provider_io_allowed()
+        if not _start_provider_attempt(state, candidate):
+            return CONTINUE
+        result = _call_provider(state, candidate)
+    except LlmReleaseFenced as exc:
+        if exc.provider_attempted:
+            state.gateway._mark_reserved_attempt_unknown(candidate.reservation_key)
+        else:
+            _release_failed_start(state, candidate)
+        state.errors.append({"provider": "gateway", "status": exc.reason})
+        return CandidateDecision("return", _fallback_result(
+            state, reason=exc.reason, reservation_key=candidate.reservation_key or None,
+        ))
     breaker_fallback = _complete_breaker(state, candidate, result)
     if breaker_fallback is not None:
         return CandidateDecision("return", breaker_fallback)

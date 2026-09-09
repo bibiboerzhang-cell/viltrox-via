@@ -23,6 +23,7 @@ from app.core.config import IS_PRODUCTION
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.costs.budget_window_roll import roll_budget_window
+from app.platform.llm_release_fence import assert_llm_provider_io_allowed
 
 
 logger = get_logger(__name__)
@@ -371,6 +372,7 @@ def reserve_llm_budget(
     normal window rollover, or settlement. Existing callers retain reaping.
     """
 
+    assert_llm_provider_io_allowed()
     provider_key = str(provider or "").strip().lower()
     model_name = str(model or "").strip()
     try:
@@ -595,6 +597,7 @@ def reserve_llm_budget(
 def mark_llm_provider_started(reservation_key: str) -> None:
     """Commit the point immediately before provider network I/O."""
 
+    assert_llm_provider_io_allowed()
     _ensure_schema()
     conn = get_conn()
     now = _utcnow()
